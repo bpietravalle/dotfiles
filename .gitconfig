@@ -1,1 +1,5 @@
-/home/bpietravalle/.gitconfig
+[user]
+	name = Brian Pietravalle
+	email = bpietravalle@gmail.com
+[color]
+	ui = auto
