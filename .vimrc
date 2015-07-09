@@ -18,8 +18,6 @@ Plugin 'tpope/vim-unimpaired'
 Plugin 'tpope/vim-surround'
 
 
-
-
 "all plugin's must be listed before following 2 lines
  
 call vundle#end()
@@ -124,5 +122,14 @@ map <C-n> :NERDTreeToggle<CR>
 
 set statusline+=%{fugitive#statusline()}
 
+"----MISC-Mappings--------------------
 
+" disable arrow keys
+noremap <Up> <Nop>
+noremap <Down> <Nop>
+noremap <Left> <Nop>
+noremap <Right> <Nop>
 
+"---Quickly open/reload vimrc--------
+noremap <leader>ev :split $MYVIMRC<CR>
+noremap <leader>sv :source $MYVIMRC<CR>
