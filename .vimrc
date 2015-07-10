@@ -85,8 +85,6 @@ set foldmethod=indent "fold by indentation
 "-----------------------------------
 "LEADER SHORTCUTS
 
-let mapleader=","
-
 "show invisibles
 nmap <leader>l :set list!<CR> 
 "----------------------------------
@@ -129,7 +127,8 @@ noremap <Up> <Nop>
 noremap <Down> <Nop>
 noremap <Left> <Nop>
 noremap <Right> <Nop>
+" disable arrow keys
 
 "---Quickly open/reload vimrc--------
 noremap <leader>ev :split $MYVIMRC<CR>
-noremap <leader>sv :source $MYVIMRC<CR>
+noremap <leader>cv :source $MYVIMRC<CR>
