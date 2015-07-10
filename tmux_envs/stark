@@ -1,0 +1,5 @@
+tmux new-session -s stark -n lib -d
+tmux send-keys -t stark 'cd ~/documents/projects/stark' C-m
+tmux send-keys -t stark 'vim' C-m
+
+
