@@ -114,11 +114,11 @@ if ! shopt -oq posix; then
 fi
 
 export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting
-#export PATH="$PATH:$HOME/bpietravalle/Downloads/SublimeText2/sublime_text" #see if works
 
+export EDITOR=vim #set vim as default text editor
 
 # below is from bitbucket.org "Set up SSH for Git" step 5
- SSH_ENV=$HOME/.ssh/environment
+SSH_ENV=$HOME/.ssh/environment
 
 #start the ssh-agent
 function start_agent {
