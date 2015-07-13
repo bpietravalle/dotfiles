@@ -85,6 +85,13 @@ inoremap <leader>cq <ESC>:wq<CR>
 "Quickly open/reload vimrc
 noremap <leader>ev :split $MYVIMRC<CR>
 noremap <leader>cv :source $MYVIMRC<CR>
+
+"register mngt
+noremap <leader>r :registers<CR>
+"buffer mngt
+noremap <leader>bb :ls<CR>
+noremap <leader>bn :bn<CR>
+noremap <leader>bp :bp<CR>
 "----------------------------------
 "SYNTASTIC CONFIG- recommended
 
@@ -98,7 +105,6 @@ let g:syntastic_check_on_wq = 0
 "------------------------------------
 "NERDTREE CONFIG
 "automatically starts nerdtree if no file specified
-"w invisible markings
 autocmd StdinReadPre * let s:std_in=1
 autocmd VimEnter * if argc() == 0 && !exists("s:std_in") | NERDTree | endif
 "automatically close vim if nerdtree is only remaining window open
