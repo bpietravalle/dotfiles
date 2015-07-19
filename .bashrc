@@ -145,3 +145,5 @@ fi
 alias ssh='eval $(/usr/bin/keychain --eval --agents ssh -Q --quiet ~/.ssh/*_rsa) && ssh'
 
 alias git='eval $(/usr/bin/keychain --eval --agents ssh -Q --quiet ~/.ssh/*_rsa) && git'
+export PATH=$HOME/local/bin:$PATH
+export PATH=$HOME/local/bin:$PATH

@@ -44,7 +44,7 @@ filetype indent on "load filetype-specific indent files
 set wildmenu " visual autocomplete for command menu
 set lazyredraw " redraw screen only when needed
 set showmatch " highlight matching [{()}]
-
+set clipboard=unnamedplus
 "--------------------------------
 "SEARCHING
 set incsearch "search as chars are enters
