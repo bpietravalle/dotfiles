@@ -19,10 +19,10 @@ Plugin 'tpope/vim-dispatch'
 Plugin 'tpope/vim-commentary'
 Plugin 'tpope/vim-unimpaired'
 Plugin 'tpope/vim-surround'
+Plugin 'kchmck/vim-coffee-script'
 
 "all plugin's must be listed before following 2 lines
 call vundle#end()
-filetype plugin indent on
 "-------------------------------
 "COLORS
 syntax enable
