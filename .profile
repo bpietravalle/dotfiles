@@ -7,7 +7,7 @@
 # the default umask is set in /etc/profile; for setting the umask
 # for ssh logins, install and configure the libpam-umask package.
 #umask 022
-export PATH="/home/bpietravalle/.rvm/bin:/home/bpietravalle/local/bin:/home/bpietravalle/.rvm/gems/ruby-2.2.2@stark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="$HOME/.rvm/bin:$HOME/local/bin:$HOME/.rvm/gems/ruby-2.2.2@stark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # if running bash
 if [ -n "$BASH_VERSION" ]; then
