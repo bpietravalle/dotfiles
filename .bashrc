@@ -113,8 +113,6 @@ if ! shopt -oq posix; then
   fi
 fi
 
-export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting
-
 export EDITOR=vim #set vim as default text editor
 
 # below is from bitbucket.org "Set up SSH for Git" step 5
@@ -140,10 +138,20 @@ else
 	start_agent;
 fi
 
+[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm/scripts/rvm" # Load RVM into a shell session *as a function*
 
 #code for starting agent in background - found on web by 'gillmati (sp)?
 alias ssh='eval $(/usr/bin/keychain --eval --agents ssh -Q --quiet ~/.ssh/*_rsa) && ssh'
 
 alias git='eval $(/usr/bin/keychain --eval --agents ssh -Q --quiet ~/.ssh/*_rsa) && git'
-export PATH=$HOME/local/bin:$PATH
-export PATH=$HOME/local/bin:$PATH
+
+# {{{
+# Node Completion - Auto-generated, do not touch.
+#hopt -s progcomp
+#or f in $(command ls ~/.node-completion); do
+# f="$HOME/.node-completion/$f"
+# test -f "$f" && . "$f"
+#one
+# }}}
+
+export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting

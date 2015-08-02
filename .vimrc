@@ -14,12 +14,17 @@ Plugin 'scrooloose/syntastic'
 Plugin 'flazz/vim-colorschemes'
 Plugin 'kana/vim-textobj-user'
 Plugin 'nelstrom/vim-textobj-rubyblock'
+Plugin 'tpope/vim-haml'
 Plugin 'tpope/vim-repeat'
 Plugin 'tpope/vim-dispatch'
 Plugin 'tpope/vim-commentary'
 Plugin 'tpope/vim-unimpaired'
 Plugin 'tpope/vim-surround'
 Plugin 'kchmck/vim-coffee-script'
+Plugin 'einars/js-beautify'
+Plugin 'othree/html5.vim'
+Plugin 'maksimr/vim-jsbeautify'
+Plugin 'pangloss/vim-javascript'
 
 "all plugin's must be listed before following 2 lines
 call vundle#end()
@@ -56,14 +61,14 @@ set foldenable "enable it
 set foldlevelstart=10 "open most folds by default
 set foldnestmax=10 "10 mested max
 set foldmethod=indent "fold by indentation
-"--------------------------------
-"MOVEMENTS
+"Regex-----------------------------
+:set regexpengine=1
 
-
-
-
-
-
+"Html5 config---------------------------
+let g:html5_event_handler_attributes_complete=0
+let g:html5_rdfa_attributes_complete=0
+let g:html5_microdata_attributes_complete=0
+let g:html5_aria_attributes_complete=0
 "-----------------------------------
 "LEADER SHORTCUTS
 
@@ -124,3 +129,7 @@ noremap <Left> <Nop>
 inoremap <Left> <Nop>
 noremap <Right> <Nop>
 inoremap <Right> <Nop>
+"-----Mappings for JSbeautify-------------
+autocmd FileType javascript noremap <buffer>  <C-f> :call JsBeautify()<CR>
+autocmd FileType html noremap <buffer> <C-f> :call HtmlBeautify()<CR>
+autocmd FileType css noremap <buffer> <C-f> :call CSSBeautify()<CR>
