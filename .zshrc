@@ -1,3 +1,4 @@
+source ~/boom.zsh
 source ~/.zsh/colors.zsh
 source ~/.zsh/setopt.zsh
 source ~/.zsh/exports.zsh
