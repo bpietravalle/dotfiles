@@ -155,4 +155,4 @@ export NODE_PATH=$NODE_PATH:/home/bpietravalle/local/lib/node_modules
 export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting
 
 # added by travis gem
-[ -f $HOME/.travis/travis.sh ] && source $HOME.travis/travis.sh
+[ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
