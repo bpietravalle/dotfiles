@@ -31,8 +31,9 @@ call vundle#end()
 "-------------------------------
 "COLORS
 syntax enable
+set term=screen-256color
 set background=dark
-colorscheme solarized
+colorscheme badwolf
 "-------------------------------
 "INDENTATION
 filetype plugin indent on
@@ -62,7 +63,7 @@ set foldlevelstart=10 "open most folds by default
 set foldnestmax=10 "10 mested max
 set foldmethod=indent "fold by indentation
 "Regex-----------------------------
-:set regexpengine=1
+set regexpengine=1
 
 "Html5 config---------------------------
 let g:html5_event_handler_attributes_complete=0
