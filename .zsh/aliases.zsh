@@ -1,6 +1,6 @@
 # Colorize output, add file type indicator, and put sizes in human readable format
 alias ls='ls -GFh'
-
+alias reload=". ~/.zshrc && echo 'ZSH config reloaded from ~/.zshrc'"
 # Same as above, but in long listing format
 alias ll='ls -GFhl'
 
