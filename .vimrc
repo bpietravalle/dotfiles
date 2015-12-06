@@ -90,7 +90,7 @@ noremap <leader>cq :wq<CR>
 inoremap <leader>cq <ESC>:wq<CR>
 "Quickly open/reload vimrc
 noremap <leader>ev :split $MYVIMRC<CR>
-noremap <leader>cv :source $MYVIMRC<CR>
+noremap <leader>cv <ESC>:w<CR>:source $MYVIMRC<CR>
 
 "register mngt
 noremap <leader>r :registers<CR>
