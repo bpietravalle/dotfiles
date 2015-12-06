@@ -5,3 +5,18 @@
 	ui = auto
 [pull]
 	rebase = true
+[push]
+  default = simple
+[alias]
+  br = branch
+  ci = commit
+  co = checkout
+  dump = cat-file -p
+  hist = log --pretty=format:\"%h %ad | %s%d [%an]\" --graph --date=short
+	l = log --pretty=format:"%C(yellow)%h%Cred%d\\ %Creset%s%Cgreen\\ (%cr)\\ %Cblue\\ [%cn]" --decorate
+	lf = log ..@{u} --stat
+	lg = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)[%an]%Creset' --abbrev-commit --date=relative --decorate
+	ll = log --pretty=format:"%C(yellow)%h%Cred%d\\ %Creset%s%Cblue\\ [%cn]" --decorate --numstat
+	ls = log --pretty=format:\"%C(yellow)%h %Cgreen(%cr)%Creset %s %C(bold blue)[%cn]%Creset\" --name-status
+  st = status
+  type = cat-file -t
