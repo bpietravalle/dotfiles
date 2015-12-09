@@ -19,6 +19,7 @@ Plugin 'tpope/vim-repeat'
 Plugin 'tpope/vim-dispatch'
 Plugin 'tpope/vim-commentary'
 Plugin 'tpope/vim-unimpaired'
+Plugin 'tpope/vim-abolish'
 Plugin 'tpope/vim-surround'
 Plugin 'kchmck/vim-coffee-script'
 Plugin 'einars/js-beautify'
@@ -72,6 +73,7 @@ let g:html5_microdata_attributes_complete=0
 let g:html5_aria_attributes_complete=0
 "-----------------------------------
 "LEADER SHORTCUTS
+"-----------------------------------
 
 "auto align current paragraph
 noremap <leader>a =ip
@@ -98,6 +100,15 @@ noremap <leader>r :registers<CR>
 noremap <leader>bb :ls<CR>
 noremap <leader>bn :bn<CR>
 noremap <leader>bp :bp<CR>
+
+"----------------------------------
+"SEARCH/SUB
+"----------------------------------
+nnoremap & :&&<CR>
+xnoremap & :&&<CR>
+"----------------------------------
+"CTAGS
+"----------------------------------
 "----------------------------------
 "SYNTASTIC CONFIG- recommended
 
