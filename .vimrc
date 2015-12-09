@@ -145,3 +145,5 @@ inoremap <Right> <Nop>
 autocmd FileType javascript noremap <buffer>  <C-f> :call JsBeautify()<CR>
 autocmd FileType html noremap <buffer> <C-f> :call HtmlBeautify()<CR>
 autocmd FileType css noremap <buffer> <C-f> :call CSSBeautify()<CR>
+
+
