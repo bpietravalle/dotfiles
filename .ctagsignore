@@ -1,0 +1,10 @@
+plugins/
+node_modules/
+bower_components/
+www/lib/
+resources/
+hooks/
+coverage/
+e2e/
+gulp/
+scss/

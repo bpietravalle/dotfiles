@@ -4,6 +4,9 @@ alias reload=". ~/.zshrc && echo 'ZSH config reloaded from ~/.zshrc'"
 # Same as above, but in long listing format
 alias ll='ls -GFhl'
 
+#quiet mode for bugs with ubuntu/Chromium
+alias google='google-chrome --disable-gpu'
+
 alias rake='noglob rake'
 alias bower='noglob bower'
 # alias git='hub'

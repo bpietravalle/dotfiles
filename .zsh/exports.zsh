@@ -1,5 +1,7 @@
 # Currently this path is appendend to dynamically when picking a ruby version
+
 export PATH=node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/local/share/npm/bin:$PATH
+export NODE_PATH=$NODE_PATH:$HOME/local/lib/node_modules
 
 # Setup terminal, and turn on colors
 export TERM=xterm-256color
