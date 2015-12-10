@@ -5,6 +5,6 @@ dir="`git rev-parse --git-dir`"
 trap 'rm -f "$dir/tags.$$"' EXIT INT TERM
 ign="$dir/.ctagsignore"
 touch "$ign"
-echo "'^plugins/'\n'^www/lib/'\n'^bower_components'\n'^node_modules'\n'^hooks/'\n'^resources/'\n'^scss/'\n'^coverage/'\n'^e2e/'\n'^gulp/'\n">$ign
-git ls-files|ctags --tag-relative -L - -f$dir/tags.$$ --languages=-sql --exclude=@$dir/.ctagsignore
+echo "*plugins\n*www/lib\n*bower_components\n*node_modules\n*hooks\n*resources\nscss\n*coverage\n*e2e\n*gulp\n">$ign
+git ls-files|ctags --tag-relative -L - -f$dir/tags.$$ --languages=-javascript,sql --exclude=@$dir/.ctagsignore
 mv $dir/tags.$$ $dir/tags
