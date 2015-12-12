@@ -1,7 +1,7 @@
 # Currently this path is appendend to dynamically when picking a ruby version
+export NODE_PATH=$HOME/local/lib/node_modules
 
-export PATH=node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/local/share/npm/bin:$PATH
-export NODE_PATH=$NODE_PATH:$HOME/local/lib/node_modules
+export PATH=$NODE_PATH:/usr/local/sbin:/usr/local/bin:/usr/local/share/npm/bin:$PATH
 
 # Setup terminal, and turn on colors
 export TERM=xterm-256color
@@ -15,16 +15,20 @@ export EDITOR=vim
 # This resolves issues install the mysql, postgres, and other gems with native non universal binary extensions
 export ARCHFLAGS='-arch x86_64'
 
-export LESS='--ignore-case --raw-control-chars'
+# export LESS='--ignore-case --raw-control-chars'
 export PAGER='most'
-# export PYTHONPATH=/usr/local/lib/python2.6/site-packages
+# 
 # CTAGS Sorting in VIM/Emacs is better behaved with this in place
 export LC_COLLATE=C
 
-# GitHub token with no scope, used to get around API limits
-# export HOMEBREW_GITHUB_API_TOKEN=$(cat ~/.gh_api_token)
 #
+[[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm/scripts/rvm" # Load RVM into a shell session *as a function*
+### Added by the Heroku Toolbelt
+export PATH="/usr/local/heroku/bin:$PATH"
 #
+# added by travis gem
+[ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
+
 
 # help!
 # autoload -U run-help

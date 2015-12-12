@@ -10,7 +10,6 @@ source ~/.zsh/history.zsh
 source ~/.zsh/zsh_hooks.zsh
 
 if which rbenv > /dev/null; then eval "$(rbenv init -)"; fi
-export PATH=bin:script:~/.bin:$PATH
 
 precmd() {
   if [[ -n "$TMUX" ]]; then
@@ -18,6 +17,4 @@ precmd() {
   fi
 }
 #
-# added by travis gem
-[ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
 

@@ -6,26 +6,26 @@ filetype off
 runtime match
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
-Plugin 'gmarik/Vundle.vim'
-Plugin 'scrooloose/nerdtree'
-Plugin 'tpope/vim-fugitive'
-Plugin 'kien/ctrlp.vim'
-Plugin 'scrooloose/syntastic'
+Plugin 'einars/js-beautify'
 Plugin 'flazz/vim-colorschemes'
+Plugin 'gmarik/Vundle.vim'
 Plugin 'kana/vim-textobj-user'
+Plugin 'kchmck/vim-coffee-script'
+Plugin 'kien/ctrlp.vim'
+Plugin 'maksimr/vim-jsbeautify'
+Plugin 'othree/html5.vim'
+Plugin 'pangloss/vim-javascript'
 Plugin 'nelstrom/vim-textobj-rubyblock'
+Plugin 'scrooloose/nerdtree'
+Plugin 'scrooloose/syntastic'
+Plugin 'tpope/vim-abolish'
+Plugin 'tpope/vim-commentary'
+Plugin 'tpope/vim-dispatch'
+Plugin 'tpope/vim-fugitive'
 Plugin 'tpope/vim-haml'
 Plugin 'tpope/vim-repeat'
-Plugin 'tpope/vim-dispatch'
-Plugin 'tpope/vim-commentary'
-Plugin 'tpope/vim-unimpaired'
-Plugin 'tpope/vim-abolish'
 Plugin 'tpope/vim-surround'
-Plugin 'kchmck/vim-coffee-script'
-Plugin 'einars/js-beautify'
-Plugin 'othree/html5.vim'
-Plugin 'maksimr/vim-jsbeautify'
-Plugin 'pangloss/vim-javascript'
+Plugin 'tpope/vim-unimpaired'
 
 "all plugin's must be listed before following 2 lines
 call vundle#end()
@@ -37,7 +37,7 @@ set background=dark
 colorscheme badwolf
 "-------------------------------
 "INDENTATION
-filetype plugin indent on
+filetype plugin on
 set tabstop=2 "number of spaces per tab
 set shiftwidth=2
 set softtabstop=3 "number of spaces in tab when editing
@@ -96,10 +96,13 @@ noremap <leader>cv <ESC>:w<CR>:source $MYVIMRC<CR>
 
 "register mngt
 noremap <leader>r :registers<CR>
+"----------------------------------
 "buffer mngt
-noremap <leader>bb :ls<CR>
-noremap <leader>bn :bn<CR>
-noremap <leader>bp :bp<CR>
+"----------------------------------
+nnoremap <silent> [b :bprevious<CR>
+nnoremap <silent> ]b :bnext<CR>
+nnoremap <silent> [B :bfirst<CR>
+nnoremap <silent> ]B :blast<CR>
 
 "----------------------------------
 "SEARCH/SUB

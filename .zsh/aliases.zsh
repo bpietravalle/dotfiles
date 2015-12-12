@@ -12,8 +12,9 @@ alias bower='noglob bower'
 # alias git='hub'
 
 # Launch chrome with remote debugging port on
-# alias chrome='/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222'
 #
+alias bro='browserify'
+
 alias gs='git status '
 alias ga='git add '
 alias gb='git branch '
@@ -25,3 +26,7 @@ alias gx='gitx --all'
 
 alias got='git '
 alias get='git '
+
+alias jnk='jasmine-node-karma'
+alias jnkt='jasmine-node-karma --color spec/'
+alias jnka='jasmine-node-karma --autotest --color spec/'
