@@ -1,7 +1,24 @@
 # Currently this path is appendend to dynamically when picking a ruby version
-export NODE_PATH=$HOME/local/lib/node_modules
 
-export PATH=$NODE_PATH:/usr/local/sbin:/usr/local/bin:/usr/local/share/npm/bin:$PATH
+
+################
+# PATH EXPORTS #
+# #############
+
+[[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm/scripts/rvm" # Load RVM into a shell session *as a function*
+
+[ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
+
+export NODE_PATH=$HOME/local/lib/node_modules
+export HEROKU_PATH=/usr/local/heroku/bin 
+export HOME_BIN=$HOME/local/bin
+export RVM_PATH=$HOME/.rvm/gems/ruby/2.2.2/bin
+export PATH=$RVM_PATH:$HOME_BIN:$NODE_PATH:$HEROKU_PATH:$PATH
+
+
+################
+# Misc. EXPORTS #
+# #############
 
 # Setup terminal, and turn on colors
 export TERM=xterm-256color
@@ -16,18 +33,12 @@ export EDITOR=vim
 export ARCHFLAGS='-arch x86_64'
 
 # export LESS='--ignore-case --raw-control-chars'
-export PAGER='most'
+# export PAGER='most'
 # 
 # CTAGS Sorting in VIM/Emacs is better behaved with this in place
 export LC_COLLATE=C
 
 #
-[[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm/scripts/rvm" # Load RVM into a shell session *as a function*
-### Added by the Heroku Toolbelt
-export PATH="/usr/local/heroku/bin:$PATH"
-#
-# added by travis gem
-[ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
 
 
 # help!
