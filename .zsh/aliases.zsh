@@ -9,11 +9,8 @@ alias google='google-chrome --disable-gpu'
 
 alias rake='noglob rake'
 alias bower='noglob bower'
-# alias git='hub'
-
-# Launch chrome with remote debugging port on
-#
 alias bro='browserify'
+alias g='gulp '
 
 alias gs='git status '
 alias ga='git add '
@@ -24,9 +21,9 @@ alias go='git checkout '
 alias gk='gitk --all&'
 alias gx='gitx --all'
 
-alias got='git '
-alias get='git '
-
-alias jnk='jasmine-node-karma'
-alias jnkt='jasmine-node-karma --color spec/'
-alias jnka='jasmine-node-karma --autotest --color spec/'
+alias bb='cd $BABY/browser/src/app && vim'
+alias bm='cd $BABY/mobile/files/src/app && vim'
+alias bmd='cd $BABY/mobile/dist/src/app && vim'
+alias bs='cd $BABY/server/src && vim'
+alias fs='cd $POSH/src/ && vim'
+alias fl='cd $SPORTY/src/ && vim'
