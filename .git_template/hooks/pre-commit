@@ -1,5 +1,26 @@
 #!/bin/sh
 
+# from https://gist.github.com/jhartikainen/36a955f3bfe06557e16e
+files=git diff --cached --name-status | grep '^\(A\|M\).*\.jsx\?$' | sed 's/^[AM]//g'
+
+# Prevent ESLint help message if no files matched
+if [[ $files = "" ]] ; then
+  exit 0
+fi
+
+failed=0
+for file in ${files}; do
+  git show :$file | eslint --stdin --stdin-filename $file
+  if [[ $? != 0 ]] ; then
+    failed=1
+  fi
+done;
+
+if [[ $failed != 0 ]] ; then
+  echo "ESLint check failed, commit denied"
+  exit $failed
+fi
+
 # set -e
 # [ ! -f Gemfile ] || git diff --exit-code --cached -- Gemfile >/dev/null || bundle check
 # exec "$(git --exec-path)/../../share/git-core/templates/hooks/pre-commit.sample"

@@ -3,7 +3,6 @@ alias ls='ls -GFh'
 alias reload=". ~/.zshrc && echo 'ZSH config reloaded from ~/.zshrc'"
 # Same as above, but in long listing format
 alias ll='ls -GFhl'
-
 #quiet mode for bugs with ubuntu/Chromium
 alias google='google-chrome --disable-gpu'
 
@@ -27,3 +26,12 @@ alias bmd='cd $BABY/mobile/dist/src/app && vim'
 alias bs='cd $BABY/server/src && vim'
 alias fs='cd $POSH/src/ && vim'
 alias fl='cd $SPORTY/src/ && vim'
+
+# from https://gist.github.com/jhartikainen/36a955f3bfe06557e16e
+# returns added (A), modified (M), untracked (??) filenames
+# function git_changed_files {
+#   echo $(git status -s | grep -E '[AM?]+\s.+?\.js$' | cut -c3-)
+# }
+# run lint over changed files, if any
+# alias lint='(files=$(git_changed_files); if [[ -n $files ]]; then eslint ${=files}; fi)'
+

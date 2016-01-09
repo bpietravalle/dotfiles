@@ -13,11 +13,12 @@ Plugin 'kana/vim-textobj-user'
 Plugin 'kchmck/vim-coffee-script'
 Plugin 'kien/ctrlp.vim'
 Plugin 'maksimr/vim-jsbeautify'
+Plugin 'nelstrom/vim-textobj-rubyblock'
 Plugin 'othree/html5.vim'
 Plugin 'pangloss/vim-javascript'
-Plugin 'nelstrom/vim-textobj-rubyblock'
 Plugin 'scrooloose/nerdtree'
 Plugin 'scrooloose/syntastic'
+Plugin 'ternjs/tern_for_vim'
 Plugin 'tpope/vim-abolish'
 Plugin 'tpope/vim-commentary'
 Plugin 'tpope/vim-dispatch'
@@ -43,6 +44,9 @@ set shiftwidth=2
 set softtabstop=3 "number of spaces in tab when editing
 set autoindent
 "-----------------------------
+"COMPLETION
+set omnifunc=syntaxcomplete#Complete
+"-----------------------------
 "UI CONFIG
 set number "show line numbers
 set showcmd " show command in bottom bar
@@ -56,15 +60,14 @@ set clipboard=unnamedplus
 "SEARCHING
 set incsearch "search as chars are enters
 set hlsearch "highlight matches
+set regexpengine=1
 
 "--------------------------------
 "FOLDING
-set foldenable "enable it
-set foldlevelstart=10 "open most folds by default
-set foldnestmax=10 "10 mested max
-set foldmethod=indent "fold by indentation
-"Regex-----------------------------
-set regexpengine=1
+set foldenable 
+set foldlevelstart=10 
+set foldnestmax=10 
+set foldmethod=indent 
 
 "Html5 config---------------------------
 let g:html5_event_handler_attributes_complete=0
@@ -73,7 +76,6 @@ let g:html5_microdata_attributes_complete=0
 let g:html5_aria_attributes_complete=0
 "-----------------------------------
 "LEADER SHORTCUTS
-"-----------------------------------
 
 "auto align current paragraph
 noremap <leader>a =ip
@@ -81,37 +83,39 @@ noremap <leader>a =ip
 nmap <leader>l :set list!<CR> 
 "yank paragraph
 noremap <leader> cp yap<S-{>p
-"saving file
-noremap <leader>c <ESC>:w<CR>
-inoremap <leader>c <ESC>:w<CR>
-"quitting file
-noremap <leader>q :q<CR>
-inoremap <leader>q <ESC>:q<CR>
-"saving & quitting file
-noremap <leader>cq :wq<CR>
-inoremap <leader>cq <ESC>:wq<CR>
+noremap <leader>w <ESC>:w<CR>
+inoremap <leader>w <ESC>:w<CR>
+noremap <leader>wq :wq<CR>
+inoremap <leader>wq <ESC>:wq<CR>
 "Quickly open/reload vimrc
 noremap <leader>ev :split $MYVIMRC<CR>
 noremap <leader>cv <ESC>:w<CR>:source $MYVIMRC<CR>
 
+"----------------------------------
+" Fugitive
+noremap <leader>gs <ESC>:Gstatus<CR>
+
+"----------------------------------
 "register mngt
 noremap <leader>r :registers<CR>
-"----------------------------------
 "buffer mngt
-"----------------------------------
 nnoremap <silent> [b :bprevious<CR>
 nnoremap <silent> ]b :bnext<CR>
 nnoremap <silent> [B :bfirst<CR>
 nnoremap <silent> ]B :blast<CR>
 
 "----------------------------------
-"SEARCH/SUB
+"TERN
+noremap <leader>df <ESC>:TernDef<CR>
+noremap <leader>dc <ESC>:TernDoc<CR>
+noremap <leader>tp <ESC>:TernType<CR>
+noremap <leader>rf <ESC>:TernRefs<CR>
+noremap <leader>rn <ESC>:TernRename<CR>
+
 "----------------------------------
+"SEARCH/SUB
 nnoremap & :&&<CR>
 xnoremap & :&&<CR>
-"----------------------------------
-"CTAGS
-"----------------------------------
 "----------------------------------
 "SYNTASTIC CONFIG- recommended
 
@@ -122,6 +126,8 @@ let g:syntastic_always_populate_loc_list = 1
 let g:syntastic_auto_loc_list = 1
 let g:syntastic_check_on_open = 1
 let g:syntastic_check_on_wq = 0
+let g:syntastic_javascript_checkers = ['eslint']
+let g:syntastic_javascript_eslint_exec = 'eslint_d'
 "------------------------------------
 "NERDTREE CONFIG
 "automatically starts nerdtree if no file specified
@@ -133,7 +139,8 @@ autocmd bufenter * if (winnr("$") == 1 && exists("b:NERDTreeType") && b:NERDTree
 map <C-n> :NERDTreeToggle<CR> 
 "-------------------------------------
 "FUGITIVE CONFIG
-set statusline+=%{fugitive#statusline()}
+set statusline=%<%f\ %h%m%r%{fugitive#statusline()}%=%-14.(%l,%c%V%)\ %P
+" set statusline+=%{fugitive#statusline()}
 "----MISC-Mappings--------------------
 " disable arrow keys
 noremap <Up> <Nop>
@@ -148,5 +155,3 @@ inoremap <Right> <Nop>
 autocmd FileType javascript noremap <buffer>  <C-f> :call JsBeautify()<CR>
 autocmd FileType html noremap <buffer> <C-f> :call HtmlBeautify()<CR>
 autocmd FileType css noremap <buffer> <C-f> :call CSSBeautify()<CR>
-
-
