@@ -7,11 +7,11 @@
 [ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
 
 export NODE_PATH=$HOME/local/lib/node_modules
-export DRJ_PATH=/usr/local/lib/jsctags
+# export DRJ_PATH=/usr/local/lib/jsctags # currently using ternjs instead
 export HEROKU_PATH=/usr/local/heroku/bin 
 export HOME_BIN=$HOME/local/bin
 export RVM_PATH=$HOME/.rvm/gems/ruby/2.2.2/bin
-export PATH=$HOME_BIN:$NODE_PATH:$DRJ_PATH:$HEROKU_PATH:$PATH
+export PATH=$HOME_BIN:$NODE_PATH:$HEROKU_PATH:$PATH
 
 
 ################
@@ -22,6 +22,9 @@ export PATH=$HOME_BIN:$NODE_PATH:$DRJ_PATH:$HEROKU_PATH:$PATH
 export TERM=xterm-256color
 export CLICOLOR=1
 export LSCOLORS=Gxfxcxdxbxegedabagacad
+
+# Recommened for tmux to show window titles properly
+export DISABLE_AUTO_TITLE=true
 
 # Enable color in grep
 export GREP_OPTIONS='--color=auto'

@@ -21,11 +21,13 @@ alias gk='gitk --all&'
 alias gx='gitx --all'
 
 alias bb='cd $BABY/browser/src/app && vim'
-alias bm='cd $BABY/mobile/files/src/app && vim'
-alias bmd='cd $BABY/mobile/dist/src/app && vim'
+alias bm='cd $BABY/mobile/ && vim'
 alias bs='cd $BABY/server/src && vim'
 alias fs='cd $POSH/src/ && vim'
 alias fl='cd $SPORTY/src/ && vim'
+
+alias ms='mux start'
+alias tks='tmux kill-session -t'
 
 # from https://gist.github.com/jhartikainen/36a955f3bfe06557e16e
 # returns added (A), modified (M), untracked (??) filenames

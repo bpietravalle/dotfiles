@@ -8,6 +8,7 @@ source ~/.zsh/bindkeys.zsh
 source ~/.zsh/functions.zsh
 source ~/.zsh/history.zsh
 source ~/.zsh/zsh_hooks.zsh
+source ~/bin/tmuxinator.zsh
 
 if which rbenv > /dev/null; then eval "$(rbenv init -)"; fi
 

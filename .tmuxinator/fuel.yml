@@ -1,0 +1,20 @@
+name: fuel
+root: <%= ENV["SPORTY"] %>
+pre_window: cd src/
+startup_window: fuel
+windows:
+  - fuel:
+      layout: even-horizontal
+      panes:
+        - vim test/fuel
+        - vim app/fuel.js
+  - path:
+      layout: even-horizontal
+      panes:
+        - vim test/firePath.factory.spec.js
+        - vim app/firePath.js
+  - karma:
+      - tmux move-window -s 2 -t 9
+      - cd ../
+      - g test:auto
+

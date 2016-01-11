@@ -1,0 +1,13 @@
+name: server
+root: <%= ENV["BABY"] %>
+pre_window: cd server/
+startup_window: scripts
+windows:
+  - scripts:
+      layout: even-horizontal
+      panes:
+        - vim test
+        - vim 
+  - karma:
+      - tmux move-window -s 1 -t 9
+      - cd ../

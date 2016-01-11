@@ -92,6 +92,12 @@ noremap <leader>ev :split $MYVIMRC<CR>
 noremap <leader>cv <ESC>:w<CR>:source $MYVIMRC<CR>
 
 "----------------------------------
+" Location & QF list
+noremap <leader>lo <ESC>:lopen<CR>
+noremap <leader>lc <ESC>:lclose<CR>
+noremap <leader>cl <ESC>:cclose<CR>
+
+"----------------------------------
 " Fugitive
 noremap <leader>gs <ESC>:Gstatus<CR>
 
@@ -128,6 +134,7 @@ let g:syntastic_check_on_open = 1
 let g:syntastic_check_on_wq = 0
 let g:syntastic_javascript_checkers = ['eslint']
 let g:syntastic_javascript_eslint_exec = 'eslint_d'
+let g:syntastic_yaml_checkers = ['yamlxs']
 "------------------------------------
 "NERDTREE CONFIG
 "automatically starts nerdtree if no file specified
