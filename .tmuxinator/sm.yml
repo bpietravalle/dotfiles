@@ -1,0 +1,12 @@
+name: mobile
+root: <%= ENV["BABY"] %>
+pre_window: cd mobile/
+startup_window: boom
+windows:
+  - boom:
+      layout: even-horizontal
+      panes:
+        - vim
+        - vim
+  - zsh:
+     - tmux move-window -s 1 -t 9

@@ -28,6 +28,7 @@ alias fl='cd $SPORTY/src/ && vim'
 
 alias ms='mux start'
 alias tks='tmux kill-session -t'
+alias lcov='cat ./coverage/lcov-report/lcov.info | ./node_modules/coveralls/bin/coveralls.js' 
 
 # from https://gist.github.com/jhartikainen/36a955f3bfe06557e16e
 # returns added (A), modified (M), untracked (??) filenames

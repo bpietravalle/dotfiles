@@ -37,12 +37,14 @@ set term=screen-256color
 set background=dark
 colorscheme badwolf
 "-------------------------------
-"INDENTATION
+"INDENTATION & Lines
 filetype plugin on
 set tabstop=2 "number of spaces per tab
 set shiftwidth=2
 set softtabstop=3 "number of spaces in tab when editing
 set autoindent
+autocmd InsertEnter * :set number
+autocmd InsertLeave * :set rnu
 "-----------------------------
 "COMPLETION
 set omnifunc=syntaxcomplete#Complete
