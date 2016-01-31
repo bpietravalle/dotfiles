@@ -1,0 +1,28 @@
+name: dotfiles
+root: <%= ENV["GINGER"] %>
+startup_window: vm
+windows:
+  - vm:
+    - vim .vimrc
+  - cli:
+  - tm:
+    - vim .tmux.conf
+  - mux:
+    - cd .tmuxinator && vim
+  - zsh:
+      layout: even-horizontal
+      panes:
+        - cd .zsh && vim
+        - cd .zsh
+  - z:
+    - tmux move-window -s 4 -t 9
+    - tmux move-window -s 2 -t 8
+    - vim .zshrc
+  - gitConfig:
+      layout: even-horizontal
+      panes:
+        - vim .gitconfig
+        - cd after && vim
+  - gitTemplate:
+    - cd .git_template && vim
+    

@@ -18,6 +18,7 @@ Plugin 'othree/html5.vim'
 Plugin 'pangloss/vim-javascript'
 Plugin 'scrooloose/nerdtree'
 Plugin 'scrooloose/syntastic'
+Plugin 'takac/vim-hardtime'
 Plugin 'ternjs/tern_for_vim'
 Plugin 'tpope/vim-abolish'
 Plugin 'tpope/vim-commentary'
@@ -43,8 +44,6 @@ set tabstop=2 "number of spaces per tab
 set shiftwidth=2
 set softtabstop=3 "number of spaces in tab when editing
 set autoindent
-autocmd InsertEnter * :set number
-autocmd InsertLeave * :set rnu
 "-----------------------------
 "COMPLETION
 set omnifunc=syntaxcomplete#Complete
@@ -164,3 +163,13 @@ inoremap <Right> <Nop>
 autocmd FileType javascript noremap <buffer>  <C-f> :call JsBeautify()<CR>
 autocmd FileType html noremap <buffer> <C-f> :call HtmlBeautify()<CR>
 autocmd FileType css noremap <buffer> <C-f> :call CSSBeautify()<CR>
+"--------Vim-hardtime config-------------
+let g:hardtime_default_on = 1
+let g:hardtime_showmsg = 1
+let g:hardtime_maxcount = 2
+let g:hardtime_all_different_key = 1
+" need to set rnu after hardtime
+" autocmd InsertEnter * :set number
+" autocmd InsertLeave * :set rnu
+set rnu
+
