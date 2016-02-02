@@ -1,6 +1,6 @@
 name: mobile
 root: <%= ENV["BABY"] %>
-pre_window: cd mobile/source/src/app
+pre_window: cd mobile/fl/src/app
 startup_window: srvc
 windows:
   - srvc:
