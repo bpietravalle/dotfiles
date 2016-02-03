@@ -1,0 +1,28 @@
+name: core
+root: <%= ENV["BABY"] %>
+pre_window: cd coreApp/src/app/core
+startup_window: srvc
+windows:
+  - srvc:
+      layout: even-horizontal
+      panes:
+        - cd comp
+        - cd comp && vim
+  - ctrl:
+      layout: even-horizontal
+      panes:
+        - vim
+        - vim
+  - temp:
+      layout: even-horizontal
+      panes:
+        - vim
+        - vim
+  - zsh:
+     - tmux move-window -s 2 -t 7
+     - tmux move-window -s 1 -t 8
+     - tmux move-window -s 3 -t 1
+  - karma:
+     - tmux move-window -s 4 -t 9
+     - cd ../../../
+     - g test:auto

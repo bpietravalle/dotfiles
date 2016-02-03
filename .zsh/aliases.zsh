@@ -11,6 +11,7 @@ alias bower='noglob bower'
 alias bro='browserify'
 alias g='gulp '
 
+alias gsm='git submodule '
 alias gs='git status '
 alias ga='git add '
 alias gb='git branch '
