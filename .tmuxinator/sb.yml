@@ -6,8 +6,8 @@ windows:
   - srvc:
       layout: even-horizontal
       panes:
-        - cd components
-        - cd components && vim
+        - cd core
+        - cd core && vim
   - ctrl:
       layout: even-horizontal
       panes:

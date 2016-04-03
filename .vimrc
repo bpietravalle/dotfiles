@@ -39,8 +39,9 @@ set background=dark
 colorscheme badwolf
 "-------------------------------
 "INDENTATION & Lines
-filetype plugin on
+filetype plugin indent on
 set tabstop=2 "number of spaces per tab
+set expandtab "tabs === spaces
 set shiftwidth=2
 set softtabstop=3 "number of spaces in tab when editing
 set autoindent
@@ -52,7 +53,6 @@ set omnifunc=syntaxcomplete#Complete
 set number "show line numbers
 set showcmd " show command in bottom bar
 set cursorline " highlight current line
-filetype indent on "load filetype-specific indent files
 set wildmenu " visual autocomplete for command menu
 set lazyredraw " redraw screen only when needed
 set showmatch " highlight matching [{()}]
@@ -61,7 +61,6 @@ set clipboard=unnamedplus
 "SEARCHING
 set incsearch "search as chars are enters
 set hlsearch "highlight matches
-set regexpengine=1
 
 "--------------------------------
 "FOLDING
@@ -172,4 +171,10 @@ let g:hardtime_all_different_key = 1
 " autocmd InsertEnter * :set number
 " autocmd InsertLeave * :set rnu
 set rnu
+"------------Vim-coffeescript----------------
+autocmd QuickFixCmdPost * nested cwindow | redraw!
+" let coffee_lint_options = '-f	coffeelint.json'
+noremap <leader>cw <ESC>:CoffeeWatch<CR>
+noremap <leader>cr <ESC>:CoffeeRun<CR>
+noremap <leader>cl <ESC>:CoffeeLint<CR>
 

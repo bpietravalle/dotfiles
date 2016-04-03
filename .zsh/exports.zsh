@@ -13,6 +13,10 @@ export HOME_BIN=$HOME/local/bin
 export RVM_PATH=$HOME/.rvm/gems/ruby/2.2.2/bin
 export PATH=$HOME_BIN:$NODE_PATH:$HEROKU_PATH:$PATH
 
+# this is for mac
+# export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools
+# export JAVA_HOME=$(/usr/libexec/java_home)
+# export PATH=${JAVA_HOME}/bin:$PATH
 
 ################
 # Misc. EXPORTS #

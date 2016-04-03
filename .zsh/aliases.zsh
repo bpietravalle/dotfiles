@@ -6,7 +6,9 @@ alias ll='ls -GFhl'
 #quiet mode for bugs with ubuntu/Chromium
 alias google='google-chrome --disable-gpu'
 
-alias rake='noglob rake'
+alias kk='kill -9 '
+alias lsw='lsof -wni '
+
 alias bower='noglob bower'
 alias bro='browserify'
 alias g='gulp '
@@ -21,6 +23,7 @@ alias go='git checkout '
 alias gk='gitk --all&'
 alias gx='gitx --all'
 
+alias df='vim $GINGER'
 alias bb='cd $BABY/browser/src/app && vim'
 alias bm='cd $BABY/mobile/ && vim'
 alias bs='cd $BABY/server/src && vim'
@@ -30,6 +33,9 @@ alias fl='cd $SPORTY/src/ && vim'
 alias ms='mux start'
 alias tks='tmux kill-session -t'
 alias lcov='cat ./coverage/lcov-report/lcov.info | ./node_modules/coveralls/bin/coveralls.js' 
+
+alias iib='ionic build ios '
+alias gib=' g build && ionic build ios '
 
 # from https://gist.github.com/jhartikainen/36a955f3bfe06557e16e
 # returns added (A), modified (M), untracked (??) filenames
