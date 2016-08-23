@@ -34,9 +34,16 @@ alias ms='mux start'
 alias tks='tmux kill-session -t'
 alias lcov='cat ./coverage/lcov-report/lcov.info | ./node_modules/coveralls/bin/coveralls.js' 
 
+alias jm='jsdoc2md --plugin dmd-bitbucket '
+alias jmd='jsdoc2md --plugin dmd-bitbucket --src ./*.js > ./README.md'
+
+alias nas='npmAddScript '
+
+alias bolt='firebase-bolt '
 alias iib='ionic build ios '
 alias gib=' g build && ionic build ios '
-
+alias docker-test-build='docker run --rm -it -e "PAYLOAD_FILE=repl/payload-mock.json" -e "CONFIG_FILE=repl/config-mock.yml" '
+alias docker-test-local='docker run --rm -it -e "PAYLOAD_FILE=repl/payload-mock.json" -e "CONFIG_FILE=repl/config-mock.yml" -v "$PWD":/app -w /app iron/node '
 # from https://gist.github.com/jhartikainen/36a955f3bfe06557e16e
 # returns added (A), modified (M), untracked (??) filenames
 # function git_changed_files {

@@ -1,0 +1,18 @@
+name: rules
+root: <%= ENV["BABY"] %>
+pre_window: cd rules
+startup_window: src
+windows:
+  - src:
+      layout: even-horizontal
+      panes:
+        - cd src
+        - cd src && vim
+  - types:
+      layout: even-horizontal
+      panes:
+        - cd src/types 
+        - cd src/types && vim
+  - cli:
+     - tmux move-window -s 2 -t 9
+     - tmux move-window -s 1 -t 8

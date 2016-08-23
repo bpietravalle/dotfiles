@@ -1,0 +1,11 @@
+*.swo
+*.swp
+*.swn
+node_modules
+repl/*
+.env
+iron.json
+coverage
+config-mock.yml
+payload-mock.json
+npm-debug.log

@@ -1,0 +1,23 @@
+name: workers
+root: <%= ENV["BABY"] %>
+pre_window: cd workers/
+startup_window: scripts
+windows:
+  - utils:
+      layout: even-horizontal
+      panes:
+        - cd utils
+        - cd utils
+  - server:
+      layout: even-horizontal
+      panes:
+        - cd ../server/test
+        - cd ../server/src
+  - workers:
+      layout: even-horizontal
+      panes:
+        - vim
+        - vim
+  - mocha:
+      - tmux move-window -s 2 -t 8
+      - tmux move-window -s 3 -t 9

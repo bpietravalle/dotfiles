@@ -31,7 +31,6 @@ export LSCOLORS=Gxfxcxdxbxegedabagacad
 export DISABLE_AUTO_TITLE=true
 
 # Enable color in grep
-export GREP_OPTIONS='--color=auto'
 export GREP_COLOR='3;33'
 export EDITOR=vim
 # This resolves issues install the mysql, postgres, and other gems with native non universal binary extensions
@@ -39,3 +38,4 @@ export ARCHFLAGS='-arch x86_64'
 
 # CTAGS Sorting in VIM/Emacs is better behaved with this in place
 export LC_COLLATE=C
+export KEYTIMEOUT=1
