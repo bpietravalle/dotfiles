@@ -8,9 +8,8 @@ source ~/.zsh/bindkeys.zsh
 source ~/.zsh/functions.zsh
 source ~/.zsh/history.zsh
 source ~/.zsh/zsh_hooks.zsh
+source ~/.zsh/zsh-nvm.plugin.zsh
 source ~/bin/tmuxinator.zsh
-
-if which rbenv > /dev/null; then eval "$(rbenv init -)"; fi
 
 precmd() {
   if [[ -n "$TMUX" ]]; then
@@ -20,7 +19,9 @@ precmd() {
 #
 
 
-export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting
+# below is in exports.zsh
+#export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting
+#[[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm/scripts/rvm" # Load RVM into a shell session as a function
 
-export NVM_DIR="/home/bpietravalle/.nvm"
+export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm

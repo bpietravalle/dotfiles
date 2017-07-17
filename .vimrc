@@ -6,6 +6,7 @@ filetype off
 runtime match
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
+Plugin 'file:///Users/bpietravalle/docs/dev/vim-bolt'
 Plugin 'einars/js-beautify'
 Plugin 'flazz/vim-colorschemes'
 Plugin 'gmarik/Vundle.vim'
@@ -29,6 +30,7 @@ Plugin 'tpope/vim-jdaddy'
 Plugin 'tpope/vim-repeat'
 Plugin 'tpope/vim-surround'
 Plugin 'tpope/vim-unimpaired'
+Plugin 'tmux-plugins/vim-tmux'
 
 "all plugin's must be listed before following 2 lines
 call vundle#end()
@@ -57,7 +59,11 @@ set cursorline " highlight current line
 set wildmenu " visual autocomplete for command menu
 set lazyredraw " redraw screen only when needed
 set showmatch " highlight matching [{()}]
-set clipboard=unnamedplus
+if has('unnamedplus')
+  set clipboard=unnamed,unnamedplus
+else
+  set clipboard=unnamed
+endif
 "--------------------------------
 "SEARCHING
 set incsearch "search as chars are enters

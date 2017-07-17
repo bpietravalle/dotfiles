@@ -137,7 +137,7 @@ if [ -f "${SSH_ENV}" ]; then
 else
 	start_agent;
 fi
-[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm.scripts/rvm" # Load RVM into a shell session as a function
+[[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm.scripts/rvm" # Load RVM into a shell session as a function
 #code for starting agent in background - found on web by 'gillmati (sp)?
 alias ssh='eval $(/usr/bin/keychain --eval --agents ssh -Q --quiet ~/.ssh/*_rsa) && ssh'
 
@@ -151,8 +151,8 @@ alias git='eval $(/usr/bin/keychain --eval --agents ssh -Q --quiet ~/.ssh/*_rsa)
 # test -f "$f" && . "$f"
 #one
 # }}}
-export NODE_PATH=$NODE_PATH:/home/bpietravalle/local/lib/node_modules
-export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting
+# export NODE_PATH=$NODE_PATH:/home/bpietravalle/local/lib/node_modules
+# export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting
 
 # added by travis gem
 [ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
