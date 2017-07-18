@@ -2,8 +2,6 @@
 # PATH EXPORTS #
 # ##############
 
-[[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm/scripts/rvm" # Load RVM into a shell session *as a function*
-
 [ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
 
 export NODE_PATH=$HOME/local/lib/node_modules
@@ -11,8 +9,8 @@ export HEROKU_PATH=/usr/local/heroku/bin
 export USR_BIN=/usr/local/bin
 export LOCAL_BIN=$HOME/bin
 export HOME_BIN=$HOME/local/bin
-export RVM_PATH=$HOME/.rvm/gems/ruby-2.3.3/bin
-export PATH=$RVM_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$HEROKU_PATH:$PATH
+export RBENV_PATH=$HOME/.rbenv/bin
+export PATH=$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$RBENV_PATH:$HEROKU_PATH:$PATH
 
 # this is for mac
 # export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools
