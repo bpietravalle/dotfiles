@@ -41,7 +41,7 @@ if [ ! -f "$HOME/.zshrc" ]; then
 fi
 
 # shellcheck disable=SC2016
-append_to_zshrc 'export PATH="$HOME/.bin:$PATH"'
+# append_to_zshrc 'export PATH="$HOME/.bin:$PATH"'
 
 HOMEBREW_PREFIX="/usr/local"
 
@@ -116,6 +116,7 @@ tap "homebrew/services"
 brew "ctags"
 brew "git"
 brew "openssl"
+brew "keychain"
 brew "rcm"
 brew "reattach-to-user-namespace"
 brew "the_silver_searcher"
@@ -131,14 +132,13 @@ brew "heroku-toolbelt"
 brew "hub"
 
 # Image manipulation
-brew "imagemagick"
+# brew "imagemagick"
 
 # Testing
-brew "qt@5.5"
+# brew "qt@5.5"
 
 # Programming languages and package managers
 brew "libyaml" # should come after openssl
-# brew "node" 
 brew "rbenv"
 brew "ruby-build"
 brew "yarn"
@@ -148,9 +148,9 @@ brew "postgres", restart_service: true
 brew "redis", restart_service: true
 EOF
 
-fancy_echo "Symlink qmake binary to /usr/local/bin for Capybara Webkit..."
-brew unlink qt@5.5
-brew link --force qt@5.5
+#fancy_echo "Symlink qmake binary to /usr/local/bin for Capybara Webkit..."
+# brew unlink qt@5.5
+# brew link --force qt@5.5
 
 fancy_echo "Configuring Ruby ..."
 find_latest_ruby() {
@@ -171,6 +171,7 @@ rbenv global "$ruby_version"
 rbenv shell "$ruby_version"
 gem update --system
 gem_install_or_update 'bundler'
+gem_install_or_update 'tmuxinator'
 number_of_cores=$(sysctl -n hw.ncpu)
 bundle config --global jobs $((number_of_cores - 1))
 

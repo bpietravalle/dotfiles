@@ -6,17 +6,19 @@ filetype off
 runtime match
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
+Plugin 'Chiel92/vim-autoformat'
 Plugin 'file:///Users/bpietravalle/docs/dev/vim-bolt'
 Plugin 'einars/js-beautify'
 Plugin 'flazz/vim-colorschemes'
 Plugin 'gmarik/Vundle.vim'
-Plugin 'kana/vim-textobj-user'
-Plugin 'kchmck/vim-coffee-script'
 Plugin 'kien/ctrlp.vim'
+Plugin 'leafgarland/typescript-vim'
 Plugin 'maksimr/vim-jsbeautify'
-Plugin 'nelstrom/vim-textobj-rubyblock'
+Plugin 'mitermayer/vim-prettier', {'do' : 'npm install'}
 Plugin 'othree/html5.vim'
 Plugin 'pangloss/vim-javascript'
+Plugin 'Quramy/tsuquyomi'
+Plugin 'Shougo/vimproc.vim', {'do' : 'make'}
 Plugin 'scrooloose/nerdtree'
 Plugin 'scrooloose/syntastic'
 Plugin 'takac/vim-hardtime'
@@ -25,7 +27,6 @@ Plugin 'tpope/vim-abolish'
 Plugin 'tpope/vim-commentary'
 Plugin 'tpope/vim-dispatch'
 Plugin 'tpope/vim-fugitive'
-Plugin 'tpope/vim-haml'
 Plugin 'tpope/vim-jdaddy'
 Plugin 'tpope/vim-repeat'
 Plugin 'tpope/vim-surround'
@@ -36,7 +37,8 @@ Plugin 'tmux-plugins/vim-tmux'
 call vundle#end()
 "-------------------------------
 "COLORS
-syntax enable
+"syntax enable
+syntax on
 set term=screen-256color
 set background=dark
 colorscheme badwolf
@@ -165,7 +167,13 @@ noremap <Left> <Nop>
 inoremap <Left> <Nop>
 noremap <Right> <Nop>
 inoremap <Right> <Nop>
+"-----Mappings for Prettier-------------
+noremap <leader>pr <ESC>:Prettier<CR>
+"-----Mappings for Autoformat-------------
+noremap <leader>af <ESC>:Autoformat<CR>
 "-----Mappings for JSbeautify-------------
+" Autoformat works for json if jsBeautify does not
+autocmd FileType json noremap <buffer>  <C-f> :call JsBeautify()<CR>
 autocmd FileType javascript noremap <buffer>  <C-f> :call JsBeautify()<CR>
 autocmd FileType html noremap <buffer> <C-f> :call HtmlBeautify()<CR>
 autocmd FileType css noremap <buffer> <C-f> :call CSSBeautify()<CR>
@@ -178,10 +186,3 @@ let g:hardtime_all_different_key = 1
 " autocmd InsertEnter * :set number
 " autocmd InsertLeave * :set rnu
 set rnu
-"------------Vim-coffeescript----------------
-autocmd QuickFixCmdPost * nested cwindow | redraw!
-" let coffee_lint_options = '-f	coffeelint.json'
-noremap <leader>cw <ESC>:CoffeeWatch<CR>
-noremap <leader>cr <ESC>:CoffeeRun<CR>
-noremap <leader>cl <ESC>:CoffeeLint<CR>
-

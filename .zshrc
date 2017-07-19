@@ -10,7 +10,7 @@ source ~/.zsh/history.zsh
 source ~/.zsh/zsh_hooks.zsh
 source ~/.zsh/zsh-nvm.plugin.zsh
 source ~/bin/tmuxinator.zsh
-
+#not currently using ~/.zsh/ssh-find-agent.sh
 precmd() {
   if [[ -n "$TMUX" ]]; then
     tmux setenv "$(tmux display -p 'TMUX_PWD_#D')" "$PWD"
