@@ -1,20 +1,24 @@
 #!/bin/sh
 
-# 1.) install karabiner
-# install Karabiner-elements to change keyboard
+# 1.) karabiner
 # https://github.com/tekezo/Karabiner-Element
 # or if cant download a dmg
 # cd ~/docs/dev
 # git clone --depth 1 "https://github.com/tekezo/Karabiner-Elements.git"
 # cd Karabiner-Elements
 # make
-# 2.) XCode Commandline tools
+# switch caps-lock an escape
+# switch fn and left-control
+# 2.) Install Chrome
+# 3.) Install lastpass
+# 4.) XCode Commandline tools
 # xcode-select --install
-# 3.) add .ssh/config file from dropbox
-# 4.) github / ssh keys
-# 5.) ./dotfiles.sh
-# 6.) laptop
+# 5.) add .ssh/config file from dropbox
+# 6.) github / ssh keys
+# ssh -T git@github.com
+# 7.) ./dotfiles.sh
+# 8.) change Terminal Preferences to Homebrew profile
+# 9.) laptop
 # sh laptop 2>&1 
-# 7.) open vim and :PluginInstall and :VimProcInstall
-# 8.) install nvm/ npm packages/ etc
+# 10.) install nvm/ npm packages/ etc
 # ./post_install.sh

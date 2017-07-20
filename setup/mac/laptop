@@ -8,24 +8,24 @@ fancy_echo() {
   printf "\n$fmt\n" "$@"
 }
 
-append_to_zshrc() {
-  local text="$1" zshrc
-  local skip_new_line="${2:-0}"
+# append_to_zshrc() {
+#   local text="$1" zshrc
+#   local skip_new_line="${2:-0}"
 
-  if [ -w "$HOME/.zshrc.local" ]; then
-    zshrc="$HOME/.zshrc.local"
-  else
-    zshrc="$HOME/.zshrc"
-  fi
+#   if [ -w "$HOME/.zshrc.local" ]; then
+#     zshrc="$HOME/.zshrc.local"
+#   else
+#     zshrc="$HOME/.zshrc"
+#   fi
 
-  if ! grep -Fqs "$text" "$zshrc"; then
-    if [ "$skip_new_line" -eq 1 ]; then
-      printf "%s\n" "$text" >> "$zshrc"
-    else
-      printf "\n%s\n" "$text" >> "$zshrc"
-    fi
-  fi
-}
+#   if ! grep -Fqs "$text" "$zshrc"; then
+#     if [ "$skip_new_line" -eq 1 ]; then
+#       printf "%s\n" "$text" >> "$zshrc"
+#     else
+#       printf "\n%s\n" "$text" >> "$zshrc"
+#     fi
+#   fi
+# }
 
 # shellcheck disable=SC2154
 trap 'ret=$?; test $ret -ne 0 && printf "failed\n\n" >&2; exit $ret' EXIT
@@ -39,9 +39,6 @@ fi
 if [ ! -f "$HOME/.zshrc" ]; then
   touch "$HOME/.zshrc"
 fi
-
-# shellcheck disable=SC2016
-# append_to_zshrc 'export PATH="$HOME/.bin:$PATH"'
 
 HOMEBREW_PREFIX="/usr/local"
 
@@ -92,13 +89,6 @@ if ! command -v brew >/dev/null; then
     curl -fsS \
       'https://raw.githubusercontent.com/Homebrew/install/master/install' | ruby
 
-    # already in exports.zsh
-  #  append_to_zshrc '# recommended by brew doctor'
-
-    # shellcheck disable=SC2016
-  #  append_to_zshrc 'export PATH="/usr/local/bin:$PATH"' 1
-
-  #  export PATH="/usr/local/bin:$PATH"
 fi
 
 if brew list | grep -Fq brew-cask; then
@@ -117,25 +107,10 @@ brew "ctags"
 brew "git"
 brew "openssl"
 brew "keychain"
-brew "rcm"
 brew "reattach-to-user-namespace"
-brew "the_silver_searcher"
 brew "tmux"
 brew "vim"
-brew "watchman"
 brew "zsh"
-
-# Heroku
-brew "heroku-toolbelt"
-
-# GitHub
-brew "hub"
-
-# Image manipulation
-# brew "imagemagick"
-
-# Testing
-# brew "qt@5.5"
 
 # Programming languages and package managers
 brew "libyaml" # should come after openssl
@@ -143,14 +118,7 @@ brew "rbenv"
 brew "ruby-build"
 brew "yarn"
 
-# Databases
-brew "postgres", restart_service: true
-brew "redis", restart_service: true
 EOF
-
-#fancy_echo "Symlink qmake binary to /usr/local/bin for Capybara Webkit..."
-# brew unlink qt@5.5
-# brew link --force qt@5.5
 
 fancy_echo "Configuring Ruby ..."
 find_latest_ruby() {
@@ -158,9 +126,6 @@ find_latest_ruby() {
 }
 
 ruby_version="$(find_latest_ruby)"
-# already added to zshrc
-# shellcheck disable=SC2016
-#append_to_zshrc 'eval "$(rbenv init - --no-rehash)"' 1
 eval "$(rbenv init -)"
 
 if ! rbenv versions | grep -Fq "$ruby_version"; then
@@ -175,8 +140,8 @@ gem_install_or_update 'tmuxinator'
 number_of_cores=$(sysctl -n hw.ncpu)
 bundle config --global jobs $((number_of_cores - 1))
 
-if [ -f "$HOME/.laptop.local" ]; then
-  fancy_echo "Running your customizations from ~/.laptop.local ..."
-  # shellcheck disable=SC1090
-  . "$HOME/.laptop.local"
-fi
+# if [ -f "$HOME/.laptop.local" ]; then
+#   fancy_echo "Running your customizations from ~/.laptop.local ..."
+#   # shellcheck disable=SC1090
+#   . "$HOME/.laptop.local"
+# fi

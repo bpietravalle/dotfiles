@@ -6,15 +6,33 @@ fi
 if [ ! -d "$HOME/docs/dev" ]; then
   mkdir "$HOME/docs/dev"
 fi
-cd ~/docs/dev
+cd $HOME/docs/dev
 git clone "git@github.com:bpietravalle/dotfiles.git"
+cd dotfiles
+git fetch --all
+git pull --all
+git checkout mac
 cd ~
-DF_DIR="~/docs/dev/dotfiles"
+DF_DIR="$HOME/docs/dev/dotfiles"
 files=( ".bash_profile" ".bashrc" ".git_template" ".gitconfig" ".profile" ".tmux.conf" ".tmuxinator" ".vimrc" ".zsh" ".zshrc" "bin" ".bin")
 
 for i in "${files[@]}"
 do
 ln -s $DF_DIR/$i
 done
-
 # ln -s "$DF_DIR/setup/mac/.laptop.local"
+
+# setup VundleVim
+if [ ! -d "$HOME/.vim" ]; then
+  mkdir "$HOME/.vim"
+fi
+if [ ! -d "$HOME/.vim/bundle" ]; then
+  mkdir "$HOME/.vim/bundle"
+fi
+
+cd $HOME/.vim/bundle
+git clone "git@github.com:VundleVim/Vundle.vim.git"
+# vim do :PluginInstall
+# vim do :VimProcInstall
+# then cd tern_for_vim npm install
+
