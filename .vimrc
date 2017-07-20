@@ -22,7 +22,7 @@ Plugin 'Shougo/vimproc.vim', {'do' : 'make'}
 Plugin 'scrooloose/nerdtree'
 Plugin 'scrooloose/syntastic'
 Plugin 'takac/vim-hardtime'
-Plugin 'ternjs/tern_for_vim'
+" Plugin 'ternjs/tern_for_vim' "issues with es6 and/or reading py library
 Plugin 'tpope/vim-abolish'
 Plugin 'tpope/vim-commentary'
 Plugin 'tpope/vim-dispatch'
@@ -109,6 +109,8 @@ noremap <leader>cl <ESC>:cclose<CR>
 "----------------------------------
 " Fugitive
 noremap <leader>gs <ESC>:Gstatus<CR>
+noremap <leader>gd <ESC>:Gdiff<CR>
+noremap <leader>gb <ESC>:Gblame<CR>
 
 "----------------------------------
 "register mngt
@@ -121,11 +123,12 @@ nnoremap <silent> ]B :blast<CR>
 
 "----------------------------------
 "TERN
-noremap <leader>df <ESC>:TernDef<CR>
-noremap <leader>dc <ESC>:TernDoc<CR>
-noremap <leader>tp <ESC>:TernType<CR>
-noremap <leader>rf <ESC>:TernRefs<CR>
-noremap <leader>rn <ESC>:TernRename<CR>
+" uninstalled tern_for_vim due to issues with es6
+" noremap <leader>df <ESC>:TernDef<CR>
+" noremap <leader>dc <ESC>:TernDoc<CR>
+" noremap <leader>tp <ESC>:TernType<CR>
+" noremap <leader>rf <ESC>:TernRefs<CR>
+" noremap <leader>rn <ESC>:TernRename<CR>
 
 "----------------------------------
 "SEARCH/SUB
@@ -144,7 +147,9 @@ let g:syntastic_check_on_wq = 0
 let g:syntastic_javascript_checkers = ['eslint']
 let g:syntastic_javascript_eslint_exec = 'eslint_d'
 let g:syntastic_yaml_checkers = ['yamlxs']
-"------------------------------------
+
+let g:syntastic_html_tidy_ignore_errors = ["proprietary attribute " ,"trimming empty \<", "inserting implicit ", "unescaped \&" , "lacks \"action", "lacks value", "lacks \"src", "is not recognized!", "discarding unexpected", "replacing obsolete "]
+"----------------------------------------------------
 "NERDTREE CONFIG
 "automatically starts nerdtree if no file specified
 autocmd StdinReadPre * let s:std_in=1
@@ -186,3 +191,4 @@ let g:hardtime_all_different_key = 1
 " autocmd InsertEnter * :set number
 " autocmd InsertLeave * :set rnu
 set rnu
+set laststatus=2 "always display statusline

@@ -34,5 +34,3 @@ cd $HOME/.vim/bundle
 git clone "git@github.com:VundleVim/Vundle.vim.git"
 # vim do :PluginInstall
 # vim do :VimProcInstall
-# then cd tern_for_vim npm install
-

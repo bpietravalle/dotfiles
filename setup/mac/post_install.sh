@@ -5,7 +5,7 @@ nvm install "v7.10.1"
 nvm alias default "v7.10.1"
 
 # install/update global npm packages
-files=( "@angular/cli" "karma-cli" "eslint" "eslint_d" "jsonlint" "yo" "npm-check" "tslint" "promirepl" "typescript" "typescript-formatter" "generator-fountain-webapp" "generator-fountain-angular2" "prettier" )
+files=( "@angular/cli" "karma-cli" "gulp-cli" "eslint" "eslint_d" "jsonlint" "yo" "npm-check" "tslint" "promirepl" "typescript" "typescript-formatter" "generator-fountain-webapp" "generator-fountain-angular2" "prettier" )
 
 for i in "${files[@]}"
 do
@@ -20,3 +20,6 @@ npm install
 
 # final check vim version
 vim --version
+
+# install tidy-html5 -maybe
+# https://github.com/htacg/tidy-html5/blob/next/README/BUILD.md
