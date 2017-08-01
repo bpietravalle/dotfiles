@@ -13,10 +13,10 @@ npm install -g $i
 done
 
 #install ternjs in vim
-cd ~/.vim/bundle
-git clone "git@github.com:ternjs/tern_for_vim.git"
-cd tern_for_vim
-npm install
+# cd ~/.vim/bundle
+# git clone "git@github.com:ternjs/tern_for_vim.git"
+# cd tern_for_vim
+# npm install
 
 # final check vim version
 vim --version

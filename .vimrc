@@ -148,7 +148,7 @@ let g:syntastic_javascript_checkers = ['eslint']
 let g:syntastic_javascript_eslint_exec = 'eslint_d'
 let g:syntastic_yaml_checkers = ['yamlxs']
 
-let g:syntastic_html_tidy_ignore_errors = ["proprietary attribute " ,"trimming empty \<", "inserting implicit ", "unescaped \&" , "lacks \"action", "lacks value", "lacks \"src", "is not recognized!", "discarding unexpected", "replacing obsolete "]
+let g:syntastic_html_tidy_ignore_errors = ["proprietary attribute " ,"attribute name", "trimming empty \<", "inserting implicit ", "unescaped \&" , "lacks \"action", "lacks value", "lacks \"src", "lacks \"alt", "is not recognized!", "discarding unexpected", "replacing obsolete "]
 "----------------------------------------------------
 "NERDTREE CONFIG
 "automatically starts nerdtree if no file specified
