@@ -7,20 +7,24 @@ runtime match
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
 Plugin 'Chiel92/vim-autoformat'
-Plugin 'file:///Users/bpietravalle/docs/dev/vim-bolt'
+" Plugin 'file:///Users/bpietravalle/docs/dev/vim-bolt'
+Plugin 'editorconfig/editorconfig.vim'
 Plugin 'einars/js-beautify'
 Plugin 'flazz/vim-colorschemes'
+Plugin 'jiangmiao/auto-pairs'
 Plugin 'gmarik/Vundle.vim'
-Plugin 'kien/ctrlp.vim'
+Plugin 'ctrlpvim/ctrlp.vim'
 Plugin 'leafgarland/typescript-vim'
 Plugin 'maksimr/vim-jsbeautify'
 Plugin 'mitermayer/vim-prettier', {'do' : 'npm install'}
 Plugin 'othree/html5.vim'
 Plugin 'pangloss/vim-javascript'
 Plugin 'Quramy/tsuquyomi'
+Plugin 'Quramy/vim-js-pretty-template'
 Plugin 'Shougo/vimproc.vim', {'do' : 'make'}
 Plugin 'scrooloose/nerdtree'
 Plugin 'scrooloose/syntastic'
+Plugin 'Shougo/unite-outline'
 Plugin 'takac/vim-hardtime'
 " Plugin 'ternjs/tern_for_vim' "issues with es6 and/or reading py library
 Plugin 'tpope/vim-abolish'
@@ -32,6 +36,7 @@ Plugin 'tpope/vim-repeat'
 Plugin 'tpope/vim-surround'
 Plugin 'tpope/vim-unimpaired'
 Plugin 'tmux-plugins/vim-tmux'
+Plugin 'vim-scripts/AutoComplPop'
 
 "all plugin's must be listed before following 2 lines
 call vundle#end()
@@ -148,7 +153,29 @@ let g:syntastic_javascript_checkers = ['eslint']
 let g:syntastic_javascript_eslint_exec = 'eslint_d'
 let g:syntastic_yaml_checkers = ['yamlxs']
 
-let g:syntastic_html_tidy_ignore_errors = ["proprietary attribute " ,"attribute name", "trimming empty \<", "inserting implicit ", "unescaped \&" , "lacks \"action", "lacks value", "lacks \"src", "lacks \"alt", "is not recognized!", "discarding unexpected", "replacing obsolete "]
+let g:tsuquyomi_disable_quickfix = 1
+let g:syntastic_typescript_checkers = ['tsuquyomi']
+
+let g:syntastic_html_tidy_ignore_errors = ["proprietary attribute " ,"has invalid value", "attribute name", "trimming empty \<", "inserting implicit ", "unescaped \&" , "lacks \"action", "lacks value", "lacks \"src", "lacks \"alt", "is not recognized!", "discarding unexpected", "replacing obsolete "]
+"----------------------------------------------------
+"Typescript
+let g:typescript_compiler_binary = 'tsc'
+let g:typescript_compiler_options = ''
+let g:AutoPairsFlyMode = 1
+autocmd QuickFixCmdPost [^l]* nested cwindow
+autocmd QuickFixCmdPost ^l* nested lwindow
+autocmd FileType typescript syn clear foldBraces
+nnoremap <leader>sd <ESC>:TsuTypeDefinition<CR>
+nnoremap <leader>si <ESC>:TsuImplementation<CR>
+nnoremap <leader>sq <ESC>:TsuQuickFix<CR>
+nnoremap <leader>sm <ESC>:TsuImport<CR>
+nnoremap <leader>ssh <ESC>:TsuSignatureHelp<CR>
+nnoremap <leader>sep <ESC>:TsuGeterrProject<CR>
+nnoremap <leader>srp <ESC>:TsuReloadProject<CR>
+
+nnoremap <leader>jpt <ESC>:JsPreTmpl html<CR>
+nnoremap <leader>jpc <ESC>:JsPreTmplClear<CR>
+"
 "----------------------------------------------------
 "NERDTREE CONFIG
 "automatically starts nerdtree if no file specified
@@ -182,6 +209,10 @@ autocmd FileType json noremap <buffer>  <C-f> :call JsBeautify()<CR>
 autocmd FileType javascript noremap <buffer>  <C-f> :call JsBeautify()<CR>
 autocmd FileType html noremap <buffer> <C-f> :call HtmlBeautify()<CR>
 autocmd FileType css noremap <buffer> <C-f> :call CSSBeautify()<CR>
+"--------editorconfig-vim-------------
+let g:EditorConfig_exclude_patterns = ["fugitive://.*","scp://.*"]
+
+
 "--------Vim-hardtime config-------------
 let g:hardtime_default_on = 1
 let g:hardtime_showmsg = 1
@@ -192,3 +223,9 @@ let g:hardtime_all_different_key = 1
 " autocmd InsertLeave * :set rnu
 set rnu
 set laststatus=2 "always display statusline
+" open location/quickfix for data returned from grep,vimgrep, etc
+augroup myvimrc
+  autocmd!
+    autocmd QuickFixCmdPost [^l]* cwindow
+    autocmd QuickFixCmdPost l*    lwindow
+augroup END

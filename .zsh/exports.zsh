@@ -5,14 +5,14 @@
 [ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
 
 export NODE_PATH=$HOME/local/lib/node_modules
-export HEROKU_PATH=/usr/local/heroku/bin 
+# export HEROKU_PATH=/usr/local/heroku/bin 
 export USR_BIN=/usr/local/bin
 export LOCAL_DOT_BIN=$HOME/.bin
 export LOCAL_BIN=$HOME/bin
 export HOME_BIN=$HOME/local/bin
 export RBENV_PATH=$HOME/.rbenv/bin
 export YARN_PATH=$HOME/.yarn/bin
-export PATH=$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$RBENV_PATH:$YARN_PATH:$HEROKU_PATH:$PATH
+export PATH=$RBENV_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$YARN_PATH:$PATH
 
 # this is for mac
 # export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools
