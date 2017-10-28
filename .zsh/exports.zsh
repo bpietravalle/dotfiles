@@ -8,10 +8,14 @@
 
 export NODE_PATH=$HOME/local/lib/node_modules
 # export DRJ_PATH=/usr/local/lib/jsctags # currently using ternjs instead
+export ANDROID_HOME=$HOME/Android/Sdk
+export DROID_TOOLS=$ANDROID_HOME/tools
+export DROID_PLAT_TOOLS=$ANDROID_HOME/platform-tools
 export HEROKU_PATH=/usr/local/heroku/bin 
+export USR_BIN=$HOME/bin
 export HOME_BIN=$HOME/local/bin
 export RVM_PATH=$HOME/.rvm/gems/ruby/2.2.2/bin
-export PATH=$HOME_BIN:$NODE_PATH:$HEROKU_PATH:$PATH
+export PATH=$HOME_BIN:$NODE_PATH:$USR_BIN:$HEROKU_PATH:$DROID_TOOLS:$DROID_PLAT_TOOLS:$PATH
 
 # this is for mac
 # export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools
