@@ -8,8 +8,9 @@ source ~/.zsh/bindkeys.zsh
 source ~/.zsh/functions.zsh
 source ~/.zsh/history.zsh
 source ~/.zsh/zsh_hooks.zsh
+source ~/.zsh/ssh.zsh
 source ~/.zsh/zsh-nvm.plugin.zsh
-#not currently using ~/.zsh/ssh-find-agent.sh
+source ~/.zsh/plugins.zsh
 precmd() {
   if [[ -n "$TMUX" ]]; then
     tmux setenv "$(tmux display -p 'TMUX_PWD_#D')" "$PWD"

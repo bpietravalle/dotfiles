@@ -1,4 +1,5 @@
-function git_prompt_info {
+# zplug has a fn called git_prompt_info - so renamed here
+function my_git_prompt_info {
   local ref=$(=git symbolic-ref HEAD 2> /dev/null)
   local gitst="$(=git status 2> /dev/null)"
 
@@ -17,10 +18,9 @@ function git_prompt_info {
   else
     gitstatus=''
   fi
-
   if [[ -n $ref ]]; then
     echo "%{$fg_bold[green]%}/${ref#refs/heads/}%{$reset_color%}$gitstatus"
   fi
 }
 
-PROMPT='%~%<< $(git_prompt_info)${PR_BOLD_WHITE}>%{${reset_color}%} '
+PROMPT='%~%<< $(my_git_prompt_info)${PR_BOLD_WHITE}>%{${reset_color}%} '
