@@ -19,19 +19,20 @@ alias ga='git add '
 alias gb='git branch '
 alias gc='git commit'
 alias gd='git diff'
-alias go='git checkout '
 alias gk='gitk --all&'
 alias gx='gitx --all'
 
-alias df='vim $GINGER'
-alias bb='cd $BABY/browser/src/app && vim'
-alias bm='cd $BABY/mobile/ && vim'
-alias bs='cd $BABY/server/src && vim'
-alias fs='cd $POSH/src/ && vim'
-alias fl='cd $SPORTY/src/ && vim'
+alias bb='$BITBRAID_PATH'
+alias bbf='$BITBRAID_PATH/frontend'
+alias bblibs='$BITBRAID_PATH/frontend/libs'
+alias bbshareser='$BITBRAID_PATH/frontend/libs/shared/services'
+alias bbapp='$BITBRAID_PATH/frontend/apps/web/src/app'
+alias bbfeat='$BITBRAID_PATH/frontend/libs/web/features'
+alias bbpage='$BITBRAID_PATH/frontend/libs/web/pages'
 
-alias ms='mux start'
+alias ms='tmuxinator start'
 alias tks='tmux kill-session -t'
+alias tls='tmux ls'
 alias lcov='cat ./coverage/lcov-report/lcov.info | ./node_modules/coveralls/bin/coveralls.js' 
 
 alias jm='jsdoc2md --plugin dmd-bitbucket '
@@ -39,11 +40,11 @@ alias jmd='jsdoc2md --plugin dmd-bitbucket --src ./*.js > ./README.md'
 
 alias nas='npmAddScript '
 
-alias bolt='firebase-bolt '
-alias iib='ionic build ios '
-alias gib=' g build && ionic build ios '
-alias docker-test-build='docker run --rm -it -e "PAYLOAD_FILE=repl/payload-mock.json" -e "CONFIG_FILE=repl/config-mock.yml" '
-alias docker-test-local='docker run --rm -it -e "PAYLOAD_FILE=repl/payload-mock.json" -e "CONFIG_FILE=repl/config-mock.yml" -v "$PWD":/app -w /app iron/node '
+alias docker-clean=' \
+  docker ps --no-trunc -aqf "status=exited" | xargs docker rm ; \
+  docker images --no-trunc -aqf "dangling=true" | xargs docker rmi ; \
+  docker volume ls -qf "dangling=true" | xargs docker volume rm'
+
 # from https://gist.github.com/jhartikainen/36a955f3bfe06557e16e
 # returns added (A), modified (M), untracked (??) filenames
 # function git_changed_files {
@@ -51,4 +52,7 @@ alias docker-test-local='docker run --rm -it -e "PAYLOAD_FILE=repl/payload-mock.
 # }
 # run lint over changed files, if any
 # alias lint='(files=$(git_changed_files); if [[ -n $files ]]; then eslint ${=files}; fi)'
-
+alias dk='docker '
+alias dki='docker image'
+alias dkc='docker-compose '
+alias dkcc='docker container'

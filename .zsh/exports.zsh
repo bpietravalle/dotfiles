@@ -1,21 +1,21 @@
-################
+#USR###############
 # PATH EXPORTS #
 # ##############
-
-[[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm/scripts/rvm" # Load RVM into a shell session *as a function*
 
 [ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
 
 export NODE_PATH=$HOME/local/lib/node_modules
-# export DRJ_PATH=/usr/local/lib/jsctags # currently using ternjs instead
-export ANDROID_HOME=$HOME/Android/Sdk
-export DROID_TOOLS=$ANDROID_HOME/tools
-export DROID_PLAT_TOOLS=$ANDROID_HOME/platform-tools
-export HEROKU_PATH=/usr/local/heroku/bin 
-export USR_BIN=$HOME/bin
+export USR_BIN=/usr/local/bin
+export LOCAL_DOT_BIN=$HOME/.bin
+export LOCAL_BIN=$HOME/bin
 export HOME_BIN=$HOME/local/bin
-export RVM_PATH=$HOME/.rvm/gems/ruby/2.2.2/bin
-export PATH=$HOME_BIN:$NODE_PATH:$USR_BIN:$HEROKU_PATH:$DROID_TOOLS:$DROID_PLAT_TOOLS:$PATH
+export RBENV_PATH=$HOME/.rbenv/bin
+export YARN_PATH=$HOME/.yarn/bin
+export GOLANG_EXE_PATH=/usr/local/go/bin
+export GOPATH=$HOME/go
+export GO_BIN_PATH=$GOPATH/bin
+export FABRIC_BIN_PATH=$HOME/docs/dev/fabric-samples/bin
+export PATH=$RBENV_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$YARN_PATH:$FABRIC_BIN_PATH:$PATH
 
 # this is for mac
 # export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools

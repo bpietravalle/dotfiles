@@ -69,6 +69,30 @@ function trash () {
   done
 }
 
+function gitFindReplace () {
+  # on linux
+  git grep -l $1 | xargs sed -i "s/$1/$2/g"
+  # on mac
+# git grep -l 'original_text' | xargs sed -i '' -e 's/original_text/new_text/g'
+}
+
+function removeVimBuffers () {
+# -type d \( -path dir1 -o -path dir2 -o -path dir3 \) for multiple dirs
+#
+#doesnt work bc prune removes depth
+  find . -path "./node_modules" -prune -name "*.swo" -type f -delete
+  find . -path "./node_modules" -prune -name "*.swo" -type f -delete
+  find . -path "./node_modules" -prune -name "*.swo" -type f -delete
+}
+function addWatchers() {
+  echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf && sudo sysctl -p
+}
+function fixGitObjectsCorruptedErrors() {
+# https://stackoverflow.com/questions/11706215/how-to-fix-git-error-object-file-is-empty
+  find .git/objects/ -type f -empty | xargs rm
+  git fetch -p
+  git fsck --full
+}
 function strip_diff_leading_symbols {
   local color_code_regex="(\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K])"
 
@@ -80,7 +104,13 @@ function strip_diff_leading_symbols {
   # actually strips the leading symbols
   sed -r "s/^($color_code_regex)[\+\-]/\1 /g"
 }
-
+# to profile vim -- not sure where else to put it
+# :profile start logname.log
+# :profile file *
+# :profile func *
+# :e foo.md
+# :q
 ## Print a horizontal rule
 rule () {
   printf "%$(tput cols)s\n"|tr " " "─"}}
+
