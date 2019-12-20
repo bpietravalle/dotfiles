@@ -6,7 +6,7 @@ windows:
       layout: even-horizontal
       panes:
         - vim
-        - echo "boom"
+        - echo
   - feat:
       layout: even-horizontal
       panes:

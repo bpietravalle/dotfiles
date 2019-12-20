@@ -1,5 +1,6 @@
 # add in zsh-completions
 fpath=(/opt/boxen/homebrew/share/zsh-completions $fpath)
+fpath+=~/.zfunc # added for rustup
 
 autoload -U compinit && compinit                                                                                       
 zmodload -i zsh/complist

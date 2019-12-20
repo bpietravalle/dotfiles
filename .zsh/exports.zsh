@@ -13,9 +13,10 @@ export RBENV_PATH=$HOME/.rbenv/bin
 export YARN_PATH=$HOME/.yarn/bin
 export GOLANG_EXE_PATH=/usr/local/go/bin
 export GOPATH=$HOME/go
+export CARGO_PATH=$HOME/.cargo/bin
 export GO_BIN_PATH=$GOPATH/bin
 export FABRIC_BIN_PATH=$HOME/docs/dev/fabric-samples/bin
-export PATH=$RBENV_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$YARN_PATH:$FABRIC_BIN_PATH:$PATH
+export PATH=$RBENV_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$YARN_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PATH
 
 # this is for mac
 # export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools

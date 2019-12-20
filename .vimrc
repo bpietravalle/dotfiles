@@ -8,6 +8,7 @@ set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
 Plugin 'Chiel92/vim-autoformat'
 Plugin 'dense-analysis/ale'
+Plugin 'davidhalter/jedi-vim'
 Plugin 'einars/js-beautify'
 Plugin 'flazz/vim-colorschemes'
 Plugin 'jiangmiao/auto-pairs'
@@ -32,6 +33,7 @@ Plugin 'scrooloose/syntastic'
 Plugin 'Shougo/unite-outline'
 Plugin 'takac/vim-hardtime'
 " Plugin 'ternjs/tern_for_vim' "issues with es6 and/or reading py library
+Plugin 'tell-k/vim-autopep8'
 Plugin 'tpope/vim-abolish'
 Plugin 'tpope/vim-commentary'
 Plugin 'tpope/vim-dispatch'
@@ -170,6 +172,13 @@ let g:syntastic_yaml_checkers = ['yamlxs']
 let g:syntastic_typescript_checkers = ['ale']
 
 let g:syntastic_html_tidy_ignore_errors = ["proprietary attribute " ,"has invalid value", "attribute name", "trimming empty \<", "inserting implicit ", "unescaped \&" , "lacks \"action", "lacks value", "lacks \"src", "lacks \"alt", "is not recognized!", "discarding unexpected", "replacing obsolete "]
+
+let g:syntastic_python_python_exec = 'python3'
+let g:syntastic_python_checkers = ['pycodestyle']
+"----------------------------------------------------
+" vim-autopep8 config - using syntastic to show errors and autopep8 to fix
+let g:autopep8_on_save = 1
+let g:autopep8_disable_show_diff=1
 "----------------------------------------------------
 " Vim-Typescript Config
 " with current setup, this plugin is needed to set ts file type >
@@ -276,6 +285,7 @@ let g:prettier#autoformat = 0
 autocmd BufWritePre *.js,*.jsx,*.mjs,*.ts,*.tsx,*.css,*.less,*.scss,*.json,*.graphql,*.md,*.vue,*.yaml,*.html PrettierAsync
 
 au BufNewFile,BufRead Dockerfile* set filetype=dockerfile
+au BufNewFile,BufRead .env.* set filetype=sh
 " from https://webpack.js.org/configuration/watch/#vim
 " set backupcopy=yes
 "

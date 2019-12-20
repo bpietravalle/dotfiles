@@ -20,3 +20,5 @@
 # #f [ -d "$HOME/bin" ] ; then
 # #   PATH="$HOME/bin:$PATH"
 # #i
+
+export PATH="$HOME/.cargo/bin:$PATH"
