@@ -291,3 +291,6 @@ au BufNewFile,BufRead .env.* set filetype=sh
 "
 " tell autoswap.vim about tmux
 let g:autoswap_detect_tmux = 1
+
+" https://webpack.js.org/configuration/watch/#vim
+:set backupcopy=yes
