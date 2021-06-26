@@ -1,5 +1,5 @@
-name: bitbraid
-root: ~/bitbraid/bitbraid-mvp/
+name: infra
+root: ~/projects/lead-gen-infra/
 
 # Optional tmux socket
 # socket_name: foo
@@ -37,31 +37,25 @@ root: ~/bitbraid/bitbraid-mvp/
 # Controls whether the tmux session should be attached to automatically. Defaults to true.
 # attach: false
 
-startup_window: srvc
+startup_window: sh
 windows:
-  - srvc:
+  - sh:
       layout: even-horizontal
       panes:
         - vim
         - echo
-  - feat:
+  - mods:
       layout: even-horizontal
       panes:
-        - cd frontend/libs/web/features/src/lib
-        - cd frontend/libs/web/features/src/lib && vim
-  - pages:
-      layout: even-horizontal
-      panes:
-        - cd frontend/libs/web/pages
-        - cd frontend/libs/web/pages && vim
+        - cd modules && vim
+        - cd modules
   - zsh:
-     - tmux move-window -s 2 -t 7
-     - tmux move-window -s 1 -t 8
-     - tmux move-window -s 3 -t 1
-  - sh:
-     - tmux move-window -s 4 -t 9
-  - cloud:
       layout: even-horizontal
       panes:
-        - cd sls
-        - cd sls/handlers
+        - vim
+        - echo
+  - cli:
+      layout: even-horizontal
+      panes:
+       - tmux move-window -s 3 -t 9
+       - tmux move-window -s 2 -t 8

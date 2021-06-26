@@ -26,6 +26,15 @@ export PATH="$HOME/.yarn/bin:$PATH"
 eval "$(rbenv init - --no-rehash)"
 source ~/bin/tmuxinator.zsh
 
+ulimit -n 100000 unlimited # might change to 65536 65536
 # tabtab source for packages
 # uninstall by removing these lines
 [[ -f ~/.config/tabtab/__tabtab.zsh ]] && . ~/.config/tabtab/__tabtab.zsh || true
+
+
+
+# The next line updates PATH for the Google Cloud SDK.
+if [ -f '/Users/brianpietravalle/.bin/google-cloud-sdk/path.zsh.inc' ]; then . '/Users/brianpietravalle/.bin/google-cloud-sdk/path.zsh.inc'; fi
+
+# The next line enables shell command completion for gcloud.
+if [ -f '/Users/brianpietravalle/.bin/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/brianpietravalle/.bin/google-cloud-sdk/completion.zsh.inc'; fi

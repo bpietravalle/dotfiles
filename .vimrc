@@ -7,9 +7,11 @@ runtime match
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
 Plugin 'Chiel92/vim-autoformat'
+Plugin 'cespare/vim-toml'
 Plugin 'dense-analysis/ale'
 Plugin 'davidhalter/jedi-vim'
 Plugin 'einars/js-beautify'
+Plugin 'fatih/vim-go'
 Plugin 'flazz/vim-colorschemes'
 Plugin 'jiangmiao/auto-pairs'
 Plugin 'gmarik/Vundle.vim'
@@ -157,9 +159,9 @@ xnoremap & :&&<CR>
 set statusline+=%#warningsmsg#
 set statusline+=%{SyntasticStatuslineFlag()}
 set statusline+=%*
-let g:syntastic_always_populate_loc_list = 1
+let g:syntastic_always_populate_loc_list = 0
 let g:syntastic_aggregate_errors = 1
-let g:syntastic_auto_loc_list = 1
+let g:syntastic_auto_loc_list = 0
 let g:syntastic_check_on_open = 1
 let g:syntastic_check_on_wq = 0
 let g:syntastic_javascript_checkers = ['eslint']
@@ -199,19 +201,23 @@ nnoremap <leader>jpt <ESC>:JsPreTmpl html<CR>
 nnoremap <leader>jpc <ESC>:JsPreTmplClear<CR>
 
 
-let g:ale_completion_tsserver_autoimport = 1
+let g:ale_typescript_tsserver_config_path='$(npm bin)/tsserver'
+let g:ale_completion_autoimport = 1
 let g:ale_completion_enabled = 1
 let g:airline#extensions#ale#enabled = 1
 let g:ale_set_loclist = 0
 let g:ale_set_quickfix = 1
 let g:ale_open_list = 1
-" test what it does automatically first
-" let g:ale_linters = {
-" \   'javascript': ['eslint_d'],
-" \}
-" let b:ale_fixers = ['prettier', 'eslint']
+let g:ale_sign_errors = '\u+2022'
+let g:ale_sign_warning = '.'
+let b:ale_linters_explicit = 1
+let b:ale_linters = {}
+let b:ale_fixers = {}
+let b:ale_fixers.typescript = ['eslint', 'prettier']
+let b:ale_linters.typescript = ['eslint', 'tsserver']
 let g:ale_fix_on_save = 1
-" let g:deoplete#enable_at_startup = 1
+let g:ale_javascript_eslint_suppress_missing_config = 1
+let g:ale_typescript_prettier_use_local_config = 1
 "
 "----------------------------------------------------
 "NERDTREE CONFIG
@@ -278,11 +284,24 @@ augroup filetype
         au! BufRead,BufNewFile *.acl        set filetype=ciscoacl 
 augroup END 
 
+" for syntax highlighting for go templates for hugo
+function DetectGoHtmlTmpl()
+    if expand('%:e') == "html" && search("{{") != 0
+        set filetype=gohtmltmpl 
+    endif
+    if expand('%:e') == "xml" && search("{{") != 0
+        set filetype=gohtmltmpl 
+    endif
+endfunction
+
+augroup filetypedetect
+    au! BufRead,BufNewFile * call DetectGoHtmlTmpl()
+augroup END
 " vim-terraform
 let g:terraform_fmt_on_save=1
 
 let g:prettier#autoformat = 0
-autocmd BufWritePre *.js,*.jsx,*.mjs,*.ts,*.tsx,*.css,*.less,*.scss,*.json,*.graphql,*.md,*.vue,*.yaml,*.html PrettierAsync
+autocmd BufWritePre *.js,*.jsx,*.mjs,*.ts,*.tsx,*.css,*.less,*.scss,*.json,*.graphql,*.md,*.vue,*.yaml PrettierAsync
 
 au BufNewFile,BufRead Dockerfile* set filetype=dockerfile
 au BufNewFile,BufRead .env.* set filetype=sh

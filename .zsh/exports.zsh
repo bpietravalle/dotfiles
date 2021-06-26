@@ -3,7 +3,7 @@
 # ##############
 
 [ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
-
+export PYTHON_BIN=/usr/local/opt/python/libexec/bin # python3 rewrites
 export NODE_PATH=$HOME/local/lib/node_modules
 export USR_BIN=/usr/local/bin
 export LOCAL_DOT_BIN=$HOME/.bin
@@ -16,7 +16,9 @@ export GOPATH=$HOME/go
 export CARGO_PATH=$HOME/.cargo/bin
 export GO_BIN_PATH=$GOPATH/bin
 export FABRIC_BIN_PATH=$HOME/docs/dev/fabric-samples/bin
-export PATH=$RBENV_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$YARN_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PATH
+export PYTHON3_BIN=/Users/brianpietravalle/Library/Python/3.7/bin
+PG_APP_PATH=/Applications/Postgres.app/Contents/Versions/latest/bin
+export PATH=$RBENV_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$YARN_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PYTHON_BIN:$PYTHON3_BIN:$PG_APP_PATH:$PATH
 
 # this is for mac
 # export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools
