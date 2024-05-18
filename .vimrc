@@ -41,6 +41,7 @@ Plugin 'tpope/vim-commentary'
 Plugin 'tpope/vim-dispatch'
 Plugin 'tpope/vim-fugitive'
 Plugin 'tpope/vim-jdaddy'
+Plugin 'prisma/vim-prisma'
 Plugin 'tpope/vim-repeat'
 Plugin 'tpope/vim-surround'
 Plugin 'tpope/vim-unimpaired'
@@ -161,10 +162,10 @@ set statusline+=%{SyntasticStatuslineFlag()}
 set statusline+=%*
 let g:syntastic_always_populate_loc_list = 0
 let g:syntastic_aggregate_errors = 1
-let g:syntastic_auto_loc_list = 0
+let g:syntastic_auto_loc_list = 1
 let g:syntastic_check_on_open = 1
 let g:syntastic_check_on_wq = 0
-let g:syntastic_javascript_checkers = ['eslint']
+let g:syntastic_javascript_checkers = []
 let g:syntastic_javascript_eslint_exec = 'eslint_d'
 " let g:syntastic_javascript_eslint_exe='$(npm bin)/eslint' ## project specific
 let g:syntastic_yaml_checkers = ['yamlxs']
@@ -176,17 +177,18 @@ let g:syntastic_typescript_checkers = ['ale']
 let g:syntastic_html_tidy_ignore_errors = ["proprietary attribute " ,"has invalid value", "attribute name", "trimming empty \<", "inserting implicit ", "unescaped \&" , "lacks \"action", "lacks value", "lacks \"src", "lacks \"alt", "is not recognized!", "discarding unexpected", "replacing obsolete "]
 
 let g:syntastic_python_python_exec = 'python3'
-let g:syntastic_python_checkers = ['pycodestyle']
+let g:syntastic_python_checkers = ['pep8']
 "----------------------------------------------------
 " vim-autopep8 config - using syntastic to show errors and autopep8 to fix
 let g:autopep8_on_save = 1
 let g:autopep8_disable_show_diff=1
+let g:autopep8_max_line_length=79
 "----------------------------------------------------
 " Vim-Typescript Config
 " with current setup, this plugin is needed to set ts file type >
 " https://github.com/vim-syntastic/syntastic/issues/1655
-let g:typescript_compiler_binary = 'tsc'
-let g:typescript_compiler_options = '--lib es7'
+let g:typescript_compiler_binary = ''
+let g:typescript_compiler_options = ''
 let g:AutoPairsFlyMode = 1
 autocmd QuickFixCmdPost [^l]* nested cwindow
 autocmd QuickFixCmdPost ^l* nested lwindow
@@ -203,10 +205,15 @@ nnoremap <leader>jpc <ESC>:JsPreTmplClear<CR>
 
 let g:ale_typescript_tsserver_config_path='$(npm bin)/tsserver'
 let g:ale_completion_autoimport = 1
+let g:ale_lint_on_save = 1
+let g:ale_lint_on_enter = 1
+let g:ale_lint_on_insert_leave = 1
 let g:ale_completion_enabled = 1
+let g:ale_lint_delay = 200
+let g:ale_lint_on_text_changed = 'never'
 let g:airline#extensions#ale#enabled = 1
 let g:ale_set_loclist = 0
-let g:ale_set_quickfix = 1
+let g:ale_set_quickfix = 0
 let g:ale_open_list = 1
 let g:ale_sign_errors = '\u+2022'
 let g:ale_sign_warning = '.'
@@ -251,6 +258,7 @@ inoremap <Right> <Nop>
 noremap <leader>pr <ESC>:Prettier<CR>
 "-----Mappings for Autoformat-------------
 noremap <leader>af <ESC>:Autoformat<CR>
+" au BufWrite * :Autoformat
 "-----Mappings for JSbeautify-------------
 " Autoformat works for json if jsBeautify does not
 autocmd FileType json noremap <buffer>  <C-f> :call JsBeautify()<CR>
@@ -305,6 +313,7 @@ autocmd BufWritePre *.js,*.jsx,*.mjs,*.ts,*.tsx,*.css,*.less,*.scss,*.json,*.gra
 
 au BufNewFile,BufRead Dockerfile* set filetype=dockerfile
 au BufNewFile,BufRead .env.* set filetype=sh
+au BufNewFile,BufRead *.template set filetype=yaml
 " from https://webpack.js.org/configuration/watch/#vim
 " set backupcopy=yes
 "

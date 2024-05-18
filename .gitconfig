@@ -8,7 +8,8 @@
 [push]
   default = simple
 [init]
-	templatedir = ~/.git_template
+  templatedir = ~/.git_template
+  defaultBranch = master
 [fetch]
     prune = true
 [core]
@@ -80,3 +81,8 @@
   ours = "!f() { git checkout --ours $@ && git add $@; }; f"
   theirs = "!f() { git checkout --theirs $@ && git add $@; }; f"
 	ctags = !.git/hooks/ctags
+[filter "lfs"]
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true

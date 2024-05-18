@@ -11,6 +11,8 @@ source ~/.zsh/zsh_hooks.zsh
 source ~/.zsh/ssh.zsh
 source ~/.zsh/zsh-nvm.plugin.zsh
 source ~/.zsh/plugins.zsh
+# source ~/.zsh/aws.zsh
+
 precmd() {
   if [[ -n "$TMUX" ]]; then
     tmux setenv "$(tmux display -p 'TMUX_PWD_#D')" "$PWD"
@@ -19,7 +21,7 @@ precmd() {
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm
-export PATH="$HOME/.yarn/bin:$PATH"
+export PATH="$HOME/.yarn/bin:$PATH" # version 1 yarn global bin
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 
 # recommended by rbenv
@@ -38,3 +40,9 @@ if [ -f '/Users/brianpietravalle/.bin/google-cloud-sdk/path.zsh.inc' ]; then . '
 
 # The next line enables shell command completion for gcloud.
 if [ -f '/Users/brianpietravalle/.bin/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/brianpietravalle/.bin/google-cloud-sdk/completion.zsh.inc'; fi
+
+# Created by `pipx` on 2023-05-10 01:32:30
+export PATH="$PATH:/Users/brianpietravalle/.local/bin"
+
+# Created by `pipx` on 2023-05-10 02:19:45
+export PATH="$PATH:/Users/brianpietravalle/Library/Python/3.11/bin"
