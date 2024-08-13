@@ -1,9 +1,11 @@
 # add in zsh-completions
-fpath=(/opt/boxen/homebrew/share/zsh-completions $fpath)
-fpath+=~/.zsh  # added for rustup
-
-autoload -U compinit && compinit                                                                                       
+autoload -Uz compinit && compinit
 zmodload -i zsh/complist
+
+# temporary debug
+# zstyle ':completion:*' verbose yes
+# zstyle ':completion:*' format 'Completing %d'
+# zstyle ':completion:*' debug yes
 
 # man zshcontrib
 zstyle ':vcs_info:*' actionformats '%F{5}(%f%s%F{5})%F{3}-%F{5}[%F{2}%b%F{3}|%F{1}%a%F{5}]%f '

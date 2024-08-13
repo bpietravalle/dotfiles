@@ -9,6 +9,7 @@ call vundle#begin()
 Plugin 'Chiel92/vim-autoformat'
 Plugin 'cespare/vim-toml'
 Plugin 'dense-analysis/ale'
+Plugin 'psf/black'
 Plugin 'davidhalter/jedi-vim'
 Plugin 'einars/js-beautify'
 Plugin 'fatih/vim-go'
@@ -177,21 +178,28 @@ let g:syntastic_typescript_checkers = ['ale']
 let g:syntastic_html_tidy_ignore_errors = ["proprietary attribute " ,"has invalid value", "attribute name", "trimming empty \<", "inserting implicit ", "unescaped \&" , "lacks \"action", "lacks value", "lacks \"src", "lacks \"alt", "is not recognized!", "discarding unexpected", "replacing obsolete "]
 
 let g:syntastic_python_python_exec = 'python3'
-let g:syntastic_python_checkers = ['pep8']
+let g:syntastic_python_checkers = ['pycodestyle']
 "----------------------------------------------------
-" vim-autopep8 config - using syntastic to show errors and autopep8 to fix
-let g:autopep8_on_save = 1
-let g:autopep8_disable_show_diff=1
-let g:autopep8_max_line_length=79
-"----------------------------------------------------
-" Vim-Typescript Config
-" with current setup, this plugin is needed to set ts file type >
-" https://github.com/vim-syntastic/syntastic/issues/1655
-let g:typescript_compiler_binary = ''
-let g:typescript_compiler_options = ''
-let g:AutoPairsFlyMode = 1
-autocmd QuickFixCmdPost [^l]* nested cwindow
-autocmd QuickFixCmdPost ^l* nested lwindow
+augroup black_on_save
+  autocmd!
+  autocmd BufWritePre *.py Black
+augroup end
+
+nnoremap <leader>b <ESC> :Black<CR>
+  " vim-autopep8 config - using syntastic to show errors and autopep8 to fix
+  " let g:autopep8_on_save = 1
+  " let g:autopep8_disable_show_diff=1
+  " let g:autopep8_max_line_length=79
+  au BufRead,BufNewFile *.py setlocal textwidth=79
+  "----------------------------------------------------
+  " Vim-Typescript Config
+  " with current setup, this plugin is needed to set ts file type >
+  " https://github.com/vim-syntastic/syntastic/issues/1655
+  let g:typescript_compiler_binary = ''
+  let g:typescript_compiler_options = ''
+  let g:AutoPairsFlyMode = 1
+  autocmd QuickFixCmdPost [^l]* nested cwindow
+  autocmd QuickFixCmdPost ^l* nested lwindow
 
 " Ale config
 nnoremap <leader>def <ESC>:ALEGoToDefinition<CR>
@@ -221,6 +229,7 @@ let b:ale_linters_explicit = 1
 let b:ale_linters = {}
 let b:ale_fixers = {}
 let b:ale_fixers.typescript = ['eslint', 'prettier']
+let b:ale_fixers.python = ['black']
 let b:ale_linters.typescript = ['eslint', 'tsserver']
 let g:ale_fix_on_save = 1
 let g:ale_javascript_eslint_suppress_missing_config = 1

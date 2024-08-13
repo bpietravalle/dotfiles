@@ -10,7 +10,7 @@ source ~/.zsh/history.zsh
 source ~/.zsh/zsh_hooks.zsh
 source ~/.zsh/ssh.zsh
 source ~/.zsh/zsh-nvm.plugin.zsh
-source ~/.zsh/plugins.zsh
+# source ~/.zsh/plugins.zsh
 # source ~/.zsh/aws.zsh
 
 precmd() {
