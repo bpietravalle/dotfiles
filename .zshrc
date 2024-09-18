@@ -1,6 +1,8 @@
+source ~/.zsh/utils.zsh
 source ~/.zsh/colors.zsh
 source ~/.zsh/setopt.zsh
 source ~/.zsh/exports.zsh
+source ~/.zsh/docker.zsh
 source ~/.zsh/prompt.zsh
 source ~/.zsh/completion.zsh
 source ~/.zsh/aliases.zsh

@@ -295,10 +295,11 @@ augroup myvimrc
     autocmd QuickFixCmdPost l*    lwindow
 augroup END
 
-" for syntax highlighting for act files
+" for syntax highlighting for act and tfvars files
 augroup filetype 
         au! BufRead,BufNewFile *.crules     set filetype=ciscoacl 
         au! BufRead,BufNewFile *.acl        set filetype=ciscoacl 
+        au! BufRead,BufNewFile *.tfvars.*   set filetype=terraform
 augroup END 
 
 " for syntax highlighting for go templates for hugo

@@ -52,4 +52,30 @@ if [[ -z "$SSH_CONNECTION" ]]; then
   fi
 fi
 
+add_ssh_key_by_fpath() {
+  local key_path="$1"  # First argument: path to the SSH key file
+
+  # Check if the SSH key file exists
+  if [[ ! -f "$key_path" ]]; then
+    echo "Error: SSH key file not found at '$key_path'. Please provide a valid path."
+    return 1
+  fi
+  chmod 600 $key_path
+
+  # Start the SSH agent if it's not already running
+  if [[ -z "$SSH_AUTH_SOCK" ]]; then
+    echo "Starting ssh-agent..."
+    eval "$(ssh-agent -s)"
+  fi
+
+  # Add the SSH key to the agent
+  ssh-add "$key_path"
+
+  # Check if the key was added successfully
+  if [[ $? -eq 0 ]]; then
+    echo "SSH key '$key_path' added successfully."
+  else
+    echo "Error: Failed to add SSH key '$key_path'."
+  fi
+}
 

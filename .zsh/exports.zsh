@@ -6,6 +6,7 @@
 export LDFLAGS="-L/usr/local/opt/lua@5.3/lib"
 export CPPFLAGS="-I/usr/local/opt/lua@5.3/include"
 export PYTHON_BIN=/usr/local/opt/python/libexec/bin # python3 rewrites
+export DOCKER_HOST=/Users/brianpietravalle/.docker/run/docker.sock
 export NODE_PATH=$HOME/local/lib/node_modules
 export CONFIG_PATH=$HOME/.config
 export USR_BIN=/usr/local/bin:/usr/local/sbin
@@ -24,7 +25,8 @@ SPARK_VERSION=3.5.1
 export SPARK_HOME=/usr/local/Cellar/apache-spark/$SPARK_VERSION/libexec
 export PYTHONPATH=/usr/local/Cellar/apache-spark/$SPARK_VERSION/libexec/python/:$PYTHONP$
 PG_APP_PATH=/Applications/Postgres.app/Contents/Versions/latest/bin
-export PATH=$RBENV_PATH:$CONFIG_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PYTHON_BIN:$PYTHON3_BIN:$PG_APP_PATH:$PATH:$SPARK_HOME
+DOCKER_PATH=$HOME/.docker/bin
+export PATH=$RBENV_PATH:$CONFIG_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PYTHON_BIN:$PYTHON3_BIN:$PG_APP_PATH:$PATH:$SPARK_HOME:$DOCKER_PATH
 
 # this is for mac
 # export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools
