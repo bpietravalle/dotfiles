@@ -42,9 +42,3 @@ if [ -f '/Users/brianpietravalle/.bin/google-cloud-sdk/path.zsh.inc' ]; then . '
 
 # The next line enables shell command completion for gcloud.
 if [ -f '/Users/brianpietravalle/.bin/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/brianpietravalle/.bin/google-cloud-sdk/completion.zsh.inc'; fi
-
-# Created by `pipx` on 2023-05-10 01:32:30
-export PATH="$PATH:/Users/brianpietravalle/.local/bin"
-
-# Created by `pipx` on 2023-05-10 02:19:45
-export PATH="$PATH:/Users/brianpietravalle/Library/Python/3.11/bin"

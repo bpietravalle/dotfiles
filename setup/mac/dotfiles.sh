@@ -11,7 +11,6 @@ git clone "git@github.com:bpietravalle/dotfiles.git"
 cd dotfiles
 git fetch --all
 git pull --all
-git checkout mac
 cd ~
 DF_DIR="$HOME/docs/dev/dotfiles"
 files=( ".bash_profile" ".bashrc" ".git_template" ".gitconfig" ".profile" ".tmux.conf" ".tmuxinator" ".vimrc" ".zsh" ".zshrc" "bin" ".bin")

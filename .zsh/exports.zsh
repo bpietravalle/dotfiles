@@ -6,7 +6,7 @@
 export LDFLAGS="-L/usr/local/opt/lua@5.3/lib"
 export CPPFLAGS="-I/usr/local/opt/lua@5.3/include"
 export PYTHON_BIN=/usr/local/opt/python/libexec/bin # python3 rewrites
-export DOCKER_HOST=/Users/brianpietravalle/.docker/run/docker.sock
+# export DOCKER_HOST=/Users/brianpietravalle/.docker/run/docker.sock
 export NODE_PATH=$HOME/local/lib/node_modules
 export CONFIG_PATH=$HOME/.config
 export USR_BIN=/usr/local/bin:/usr/local/sbin
