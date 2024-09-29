@@ -18,6 +18,7 @@ Plugin 'jiangmiao/auto-pairs'
 Plugin 'gmarik/Vundle.vim'
 Plugin 'gioele/vim-autoswap.git'
 Plugin 'hashivim/vim-terraform'
+Plugin 'juliosueiras/vim-terraform-completion'
 Plugin 'ctrlpvim/ctrlp.vim'
 Plugin 'jparise/vim-graphql'
 Plugin 'leafgarland/typescript-vim'
@@ -161,11 +162,11 @@ xnoremap & :&&<CR>
 set statusline+=%#warningsmsg#
 set statusline+=%{SyntasticStatuslineFlag()}
 set statusline+=%*
-let g:syntastic_always_populate_loc_list = 0
-let g:syntastic_aggregate_errors = 1
+let g:syntastic_always_populate_loc_list = 1
 let g:syntastic_auto_loc_list = 1
 let g:syntastic_check_on_open = 1
 let g:syntastic_check_on_wq = 0
+let g:syntastic_aggregate_errors = 1
 let g:syntastic_javascript_checkers = []
 let g:syntastic_javascript_eslint_exec = 'eslint_d'
 " let g:syntastic_javascript_eslint_exe='$(npm bin)/eslint' ## project specific
@@ -179,6 +180,22 @@ let g:syntastic_html_tidy_ignore_errors = ["proprietary attribute " ,"has invali
 
 let g:syntastic_python_python_exec = 'python3'
 let g:syntastic_python_checkers = ['pycodestyle']
+
+" (Optional)Remove Info(Preview) window
+set completeopt-=preview
+
+" (Optional)Hide Info(Preview) window after completions
+autocmd CursorMovedI * if pumvisible() == 0|pclose|endif
+autocmd InsertLeave * if pumvisible() == 0|pclose|endif
+
+" (Optional) Enable terraform plan to be include in filter
+let g:syntastic_terraform_tffilter_plan = 1
+
+" (Optional) Default: 0, enable(1)/disable(0) plugin's keymapping
+let g:terraform_completion_keys = 1
+
+" (Optional) Default: 1, enable(1)/disable(0) terraform module registry completion
+let g:terraform_registry_module_completion = 0
 "----------------------------------------------------
 augroup black_on_save
   autocmd!

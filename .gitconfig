@@ -67,6 +67,8 @@
   chb = checkout -b
   master = checkout master
 
+  # replace phrase with another phrase ... use double quotes!
+  replace = "!f() { git grep -l \"$1\" | xargs sed -i '' 's/$1/$2/g'; }; f"
 
 	unmerge = reset --merge ORIG_HEAD
   assume   = update-index --assume-unchanged
