@@ -78,4 +78,58 @@ add_ssh_key_by_fpath() {
     echo "Error: Failed to add SSH key '$key_path'."
   fi
 }
+### new script but doesn't handle keychain logic
+# SSH_USER_CONFIG=$HOME/.ssh/config
+# SSH_ID_DIR=$HOME/.ssh
+
+# if [[ -z "$SSH_CONNECTION" ]]; then
+
+#   # Check if the SSH agent is running, otherwise start it
+#   if [[ -z "$SSH_AGENT_PID" ]] || ! ps -p "$SSH_AGENT_PID" > /dev/null; then
+#     echo "Starting new SSH agent..."
+#     eval "$(ssh-agent -s)"
+#   fi
+
+#   # Check if the SSH_AUTH_SOCK is set correctly
+#   if [[ -z "$SSH_AUTH_SOCK" ]]; then
+#     export SSH_AUTH_SOCK=$(find /tmp -type s -iname 'agent.*' 2>/dev/null | head -n 1)
+#   fi
+
+#   # Add all private keys from SSH_ID_DIR if not already added
+#   for key in "$SSH_ID_DIR"/*.pem; do
+#     if [[ -f "$key" ]]; then
+#       if ! ssh-add -l | grep -q "$key"; then
+#         echo "Adding SSH key: $key"
+#         ssh-add "$key"
+#       fi
+#     fi
+#   done
+# fi
+
+# add_ssh_key_by_fpath() {
+#   local key_path="$1"  # First argument: path to the SSH key file
+
+#   # Check if the SSH key file exists
+#   if [[ ! -f "$key_path" ]]; then
+#     echo "Error: SSH key file not found at '$key_path'. Please provide a valid path."
+#     return 1
+#   fi
+#   chmod 600 "$key_path"
+
+#   # Start the SSH agent if it's not already running
+#   if [[ -z "$SSH_AUTH_SOCK" ]]; then
+#     echo "Starting ssh-agent..."
+#     eval "$(ssh-agent -s)"
+#   fi
+
+#   # Add the SSH key to the agent
+#   ssh-add "$key_path"
+
+#   # Check if the key was added successfully
+#   if [[ $? -eq 0 ]]; then
+#     echo "SSH key '$key_path' added successfully."
+#   else
+#     echo "Error: Failed to add SSH key '$key_path'."
+#   fi
+# }
 

@@ -1,3 +1,7 @@
+# Third party completions
+
+eval "$(_POLICY_SENTRY_COMPLETE=source policy_sentry)"
+
 # add in zsh-completions
 autoload -Uz compinit && compinit
 zmodload -i zsh/complist

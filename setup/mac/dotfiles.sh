@@ -13,7 +13,7 @@ git fetch --all
 git pull --all
 cd ~
 DF_DIR="$HOME/docs/dev/dotfiles"
-files=( ".bash_profile" ".bashrc" ".git_template" ".gitconfig" ".profile" ".tmux.conf" ".tmuxinator" ".vimrc" ".zsh" ".zshrc" "bin" ".bin")
+files=( ".bash_profile" ".bashrc" ".git_template" ".gitconfig" ".profile" ".tmux.conf" ".tmuxinator" ".vimrc" ".zsh" ".zshrc" "bin" ".bin" ".terraformrc")
 
 for i in "${files[@]}"
 do
