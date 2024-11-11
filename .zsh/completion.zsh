@@ -70,3 +70,42 @@ zstyle ':filter-select' max-lines -10 # use $LINES - 10 for filter-select
 zstyle ':filter-select' rotate-list yes # enable rotation for filter-select
 zstyle ':filter-select' case-insensitive yes # enable case-insensitive search
 zstyle ':filter-select' extended-search no # see below
+
+#compdef ssh
+_ssh_hosts() {
+    local -a hosts
+    local -a known_hosts
+    local -a config_hosts
+    local line field
+
+    # Extract hosts from known_hosts
+    if [[ -r ~/.ssh/known_hosts ]]; then
+        while IFS= read -r line; do
+            field=${line%%[[:space:]]*}
+            known_hosts+=(${(s/,/)field})
+        done < ~/.ssh/known_hosts
+        # Exclude entries starting with digits or '['
+        known_hosts=(${known_hosts:#([0-9]*|[\[]*)})
+    fi
+
+    # Extract hosts from ssh config
+    if [[ -r ~/.ssh/config ]]; then
+        while IFS= read -r line; do
+            if [[ $line == Host\ * ]]; then
+                field=${line#Host }
+                # Exclude entries with glob patterns (* or ?)
+                if [[ $field != *[*?]* ]]; then
+                    config_hosts+=($field)
+                fi
+            fi
+        done < ~/.ssh/config
+    fi
+
+    hosts=(${known_hosts} ${config_hosts})
+    hosts=(${(u)hosts})  # Remove duplicates
+
+    _describe 'hosts' hosts
+}
+
+compdef _ssh_hosts ssh
+compdef _ssh_hosts scp
