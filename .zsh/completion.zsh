@@ -1,10 +1,13 @@
 # Third party completions
 
-eval "$(_POLICY_SENTRY_COMPLETE=source policy_sentry)"
 
 # add in zsh-completions
 autoload -Uz compinit && compinit
 zmodload -i zsh/complist
+
+# Added completions for specific libraries
+eval "$(register-python-argcomplete pipx)"
+eval "$(_POLICY_SENTRY_COMPLETE=source policy_sentry)"
 
 # temporary debug
 # zstyle ':completion:*' verbose yes

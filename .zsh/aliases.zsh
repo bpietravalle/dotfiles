@@ -1,5 +1,7 @@
 # Colorize output, add file type indicator, and put sizes in human readable format
 alias ls='ls -GFh'
+alias vim='/opt/homebrew/bin/vim'
+alias python='python3'
 alias reload=". ~/.zshrc && echo 'ZSH config reloaded from ~/.zshrc'"
 # Same as above, but in long listing format
 alias ll='ls -GFhl'
