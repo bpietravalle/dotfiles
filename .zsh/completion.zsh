@@ -8,6 +8,8 @@ zmodload -i zsh/complist
 # Added completions for specific libraries
 eval "$(register-python-argcomplete pipx)"
 eval "$(_POLICY_SENTRY_COMPLETE=source policy_sentry)"
+eval "$(eksctl completion zsh)"
+eval "$(kubectl completion zsh)"
 
 # temporary debug
 # zstyle ':completion:*' verbose yes
