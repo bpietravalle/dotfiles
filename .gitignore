@@ -1,4 +1,6 @@
 bin/**
+.DS_Store
+.yarn
 *.swp
 *.swo
 *.swn

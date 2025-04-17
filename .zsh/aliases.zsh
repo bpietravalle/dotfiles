@@ -65,3 +65,6 @@ alias dkcc='docker container'
 alias dkn='docker network'
 alias dkv='docker volume'
 alias dkspf='docker system prune -f'
+
+alias tfw='terraform workspace'
+alias tfa='terraform apply'
