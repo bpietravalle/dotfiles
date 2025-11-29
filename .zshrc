@@ -9,6 +9,7 @@ source ~/.zsh/aliases.zsh
 source ~/.zsh/bindkeys.zsh
 source ~/.zsh/functions.zsh
 source ~/.zsh/history.zsh
+source ~/.zsh/py.zsh
 source ~/.zsh/zsh_hooks.zsh
 source ~/.zsh/git.zsh
 source ~/.zsh/ssh.zsh
@@ -53,3 +54,11 @@ fpath=(/Users/brianpietravalle/.docker/completions $fpath)
 autoload -Uz compinit
 compinit
 # End of Docker CLI completions
+
+# pnpm
+export PNPM_HOME="/Users/brianpietravalle/Library/pnpm"
+case ":$PATH:" in
+  *":$PNPM_HOME:"*) ;;
+  *) export PATH="$PNPM_HOME:$PATH" ;;
+esac
+# pnpm end

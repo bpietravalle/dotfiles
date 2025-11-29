@@ -39,7 +39,7 @@ alias ms='tmuxinator start'
 alias tks='tmux kill-session -t'
 alias tls='tmux ls'
 alias tat='tmux a -t'
-alias lcov='cat ./coverage/lcov-report/lcov.info | ./node_modules/coveralls/bin/coveralls.js' 
+alias lcov='cat ./coverage/lcov-report/lcov.info | ./node_modules/coveralls/bin/coveralls.js'
 
 alias jm='jsdoc2md --plugin dmd-bitbucket '
 alias jmd='jsdoc2md --plugin dmd-bitbucket --src ./*.js > ./README.md'
@@ -50,7 +50,6 @@ alias docker-clean=' \
   docker ps --no-trunc -aqf "status=exited" | xargs docker rm ; \
   docker images --no-trunc -aqf "dangling=true" | xargs docker rmi ; \
   docker volume ls -qf "dangling=true" | xargs docker volume rm'
-
 # from https://gist.github.com/jhartikainen/36a955f3bfe06557e16e
 # returns added (A), modified (M), untracked (??) filenames
 # function git_changed_files {
@@ -68,3 +67,6 @@ alias dkspf='docker system prune -f'
 
 alias tfw='terraform workspace'
 alias tfa='terraform apply'
+alias claude="~/.claude/local/claude"
+alias pip="pip3"
+alias clean-claude='rm -f ~/.claude/shell-snapshots/*.sh'

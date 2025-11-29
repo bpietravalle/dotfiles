@@ -28,7 +28,8 @@ PG_APP_PATH=/Applications/Postgres.app/Contents/Versions/latest/bin
 DOCKER_PATH=$HOME/.docker/bin
 BREW=/opt/homebrew/bin
 TFENV="$HOME/.tfenv/bin"
-export PATH=$BREW:$RBENV_PATH:$CONFIG_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PYTHON_BIN:$PYTHON3_BIN:$PG_APP_PATH:$SPARK_HOME:$DOCKER_PATH:$TFENV:$PATH
+CLAUDE_DIR="$HOME/.claude/local"
+export PATH=$BREW:$RBENV_PATH:$CONFIG_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PYTHON_BIN:$PYTHON3_BIN:$PG_APP_PATH:$SPARK_HOME:$DOCKER_PATH:$TFENV:$CLAUDE_DIR:$PATH
 
 # this is for mac
 # export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools
@@ -57,4 +58,3 @@ export ARCHFLAGS='-arch x86_64'
 # CTAGS Sorting in VIM/Emacs is better behaved with this in place
 export LC_COLLATE=C
 export KEYTIMEOUT=1
-

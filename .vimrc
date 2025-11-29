@@ -10,7 +10,7 @@ Plugin 'Chiel92/vim-autoformat'
 Plugin 'cespare/vim-toml'
 Plugin 'dense-analysis/ale'
 Plugin 'psf/black'
-Plugin 'davidhalter/jedi-vim'
+" Plugin 'davidhalter/jedi-vim'
 Plugin 'einars/js-beautify'
 Plugin 'fatih/vim-go'
 Plugin 'flazz/vim-colorschemes'
@@ -31,7 +31,10 @@ Plugin 'Quramy/vim-js-pretty-template'
 Plugin 'rust-lang/rust.vim'
 Plugin 'Shougo/vimproc.vim', {'do' : 'make'}
 Plugin 'scrooloose/nerdtree'
-Plugin 'scrooloose/syntastic'
+" Plugin 'scrooloose/syntastic'
+Plugin 'fisadev/vim-isort'           " Add for import sorting
+Plugin 'vim-python/python-syntax'    " Better Python syntax highlighting
+Plugin 'Vimjas/vim-python-pep8-indent'
 Plugin 'Shougo/unite-outline'
 Plugin 'takac/vim-hardtime'
 Plugin 'tell-k/vim-autopep8'
@@ -47,7 +50,9 @@ Plugin 'tpope/vim-unimpaired'
 Plugin 'tmux-plugins/vim-tmux'
 Plugin 'vim-airline/vim-airline'
 Plugin 'vim-airline/vim-airline-themes'
-Plugin 'vim-scripts/AutoComplPop'
+" Plugin 'ycm-core/YouCompleteMe', {'do': './install.py --all'}
+" Plugin 'neoclide/coc.nvim', {'branch': 'release', 'do': 'npm ci'}
+" Plugin 'vim-scripts/AutoComplPop'
 Plugin 'vim-scripts/ciscoacl.vim'
 "all plugin's must be listed before following 2 lines
 call vundle#end()
@@ -65,12 +70,11 @@ filetype plugin indent on
 set tabstop=2 "number of spaces per tab
 set expandtab "tabs === spaces
 set shiftwidth=2
-set softtabstop=3 "number of spaces in tab when editing
+set softtabstop=2 "number of spaces in tab when editing
 set autoindent
 
 "-----------------------------
 "COMPLETION
-set omnifunc=ale#completion#OmniFunc
 
 "-----------------------------
 "UI CONFIG
@@ -161,23 +165,22 @@ xnoremap & :&&<CR>
 "SYNTASTIC CONFIG- recommended
 
 set statusline+=%#warningsmsg#
-set statusline+=%{SyntasticStatuslineFlag()}
+" set statusline+=%{SyntasticStatuslineFlag()}
 set statusline+=%*
-let g:syntastic_always_populate_loc_list = 1
-let g:syntastic_auto_loc_list = 0
-let g:syntastic_check_on_open = 1
-let g:syntastic_check_on_wq = 0
-let g:syntastic_aggregate_errors = 1
-let g:syntastic_javascript_checkers = []
-let g:syntastic_javascript_eslint_exec = 'eslint_d'
-let g:syntastic_yaml_checkers = ['yamlxs']
-let g:syntastic_typescript_checkers = ['ale']
+" let g:syntastic_always_populate_loc_list = 0
+" let g:syntastic_auto_loc_list = 0
+" let g:syntastic_check_on_open = 1
+" let g:syntastic_check_on_wq = 0
+" let g:syntastic_aggregate_errors = 1
+" let g:syntastic_javascript_checkers = []
+" let g:syntastic_javascript_eslint_exec = 'eslint_d'
+" let g:syntastic_yaml_checkers = ['yamlxs']
+" let g:syntastic_typescript_checkers = ['ale']
 
-let g:syntastic_html_tidy_ignore_errors = ["proprietary attribute " ,"has invalid value", "attribute name", "trimming empty \<", "inserting implicit ", "unescaped \&" , "lacks \"action", "lacks value", "lacks \"src", "lacks \"alt", "is not recognized!", "discarding unexpected", "replacing obsolete "]
 
-let g:syntastic_python_python_exec = 'python3'
-let g:syntastic_python_checkers = ['pycodestyle']
-let g:syntastic_python_pycodestyle_args = '--ignore=E501'
+" let g:syntastic_python_python_exec = 'python3'
+" let g:syntastic_python_checkers = ['pycodestyle']
+" let g:syntastic_python_pycodestyle_args = '--ignore=E501'
 
 " (Optional)Remove Info(Preview) window
 set completeopt-=preview
@@ -187,7 +190,7 @@ autocmd CursorMovedI * if pumvisible() == 0|pclose|endif
 autocmd InsertLeave * if pumvisible() == 0|pclose|endif
 
 " (Optional) Enable terraform plan to be include in filter
-let g:syntastic_terraform_tffilter_plan = 1
+" let g:syntastic_terraform_tffilter_plan = 1
 " (Optional) Default: 0, enable(1)/disable(0) plugin's keymapping
 let g:terraform_completion_keys = 1
 " (Optional) Default: 1, enable(1)/disable(0) terraform module registry completion
@@ -195,14 +198,18 @@ let g:terraform_registry_module_completion = 0
 
 "----------------------------------------------------
 " Python Configuration
-augroup black_on_save
-  autocmd!
-  autocmd BufWritePre *.py Black
-augroup end
+" augroup black_on_save
+"   autocmd!
+"   autocmd BufWritePre *.py Black
+" augroup end
 
-nnoremap <leader>b <ESC> :Black<CR>
-au BufRead,BufNewFile *.py setlocal textwidth=79
-
+" nnoremap <leader>b <ESC> :Black<CR>
+" au BufRead,BufNewFile *.py setlocal textwidth=
+let g:ale_python_black_options = '--line-length=88'
+let g:ale_python_isort_options = '--profile black'
+let g:ale_python_mypy_options = '--ignore-missing-imports'
+let g:ale_python_ruff_options = '--select E,W,F,I,UP,B,C4,SIM,PIE --ignore E501,W503,E203'
+let g:ale_python_ruff_format_options = '--line-length=88'
 "----------------------------------------------------
 " Vim-Typescript Config
 let g:typescript_compiler_binary = ''
@@ -244,84 +251,145 @@ nnoremap <leader>gn :ALENext<CR>
 nnoremap <leader>gp :ALEPrevious<CR>
 nnoremap <leader>ca :ALECodeAction<CR>
 nnoremap <leader>rn :ALERename<CR>
-
-" Keep these as alternatives or for backward compatibility
-nnoremap <leader>def <ESC>:ALEGoToDefinition<CR>
-nnoremap <leader>ref <ESC>:ALEFindReferences<CR>
-nnoremap <leader>hov <ESC>:ALEHover<CR>
-nnoremap <leader>sym <ESC>:ALESymbolSearch<CR>
-
+nnoremap <leader>imp :ALEOrganizeImports<CR>
+nnoremap <silent> <leader>en :ALENextWrap<CR>
+nnoremap <silent> <leader>ep :ALEPreviousWrap<CR>
+nnoremap <silent> <leader>ef :ALEFirst<CR>
+nnoremap <silent> <leader>el :ALELast<CR>
 nnoremap <leader>jpt <ESC>:JsPreTmpl html<CR>
 nnoremap <leader>jpc <ESC>:JsPreTmplClear<CR>
 
 " ALE Configuration
-" let g:ale_typescript_tsserver_executable = 'npx tsserver' # if waht to use global
 let g:ale_typescript_tsserver_use_global = 0
-let g:ale_completion_autoimport = 1
 let g:ale_lint_on_save = 1
 let g:ale_lint_on_enter = 1
+" let g:ale_lint_delay = 1000
+" let g:ale_echo_delay = 100
+" let g:ale_command_timeout = 10
 let g:ale_lint_on_insert_leave = 0
 let g:ale_completion_enabled = 1
-let g:ale_lint_delay = 1000
+let g:ale_completion_autoimport = 1
+let g:ale_completion_max_suggestions = 50
 let g:ale_lint_on_text_changed = 'never'
 let g:airline#extensions#ale#enabled = 1
 let g:ale_set_loclist = 0
 let g:ale_set_quickfix = 0
-let g:ale_open_list = 1
+let g:ale_open_list = 0
 let g:ale_sign_errors = '\u+2022'
 let g:ale_sign_warning = '.'
-" let g:ale_fix_on_save = 1 # using below temporary
+let b:ale_fix_on_save = 1
 let g:ale_javascript_eslint_suppress_missing_config = 1
 let g:ale_typescript_prettier_use_local_config = 1
 " temporary increase logging
 let g:ale_history_enabled = 1
 let g:ale_history_log_output = 1
 
-let g:ale_command_timeout =550
-" temporary test below
-" Disable automatic fixing on save
-let g:ale_fix_on_save = 0
-" Set up a custom autocommand that applies fixes only after linting completes
-augroup custom_ale_fix_after_lint
-  autocmd!
-  " This will run the fixer only after linting completes
-  autocmd User ALELintPost if ale#Var(bufnr(''), 'fix_on_save') | ALEFix | endif
-augroup END
-
-" Make sure this variable is set for buffers where you want fixing
-let b:ale_fix_on_save = 1
+let g:ale_command_timeout =200
 " Global ALE fixers and linters
 let g:ale_fixers = {
 \   '*': ['remove_trailing_lines', 'trim_whitespace'],
-\   'javascript': ['eslint', 'prettier'],
-\   'typescript': ['eslint', 'prettier'],
-\   'python': ['black'],
+\   'javascript': ['prettier', 'eslint'],
+\   'typescript': ['prettier', 'eslint'],
+\   'python': ['ruff', 'ruff_format', 'black'],
 \   'terraform': ['terraform', 'tflint'],
 \}
 
 let g:ale_linters = {
-\   'javascript': ['eslint', 'tsserver'],
+\   'javascript': ['eslint'],
 \   'typescript': ['eslint', 'tsserver'],
-\   'python': ['pycodestyle', 'flake8'],
+\   'python': ['pylsp', 'ruff', 'mypy'],
 \   'terraform': ['tflint', 'terraform'],
 \}
+" Remove the global omnifunc line and use this instead
+augroup ale_completion
+  autocmd!
+  autocmd FileType python setlocal omnifunc=ale#completion#OmniFunc
+  autocmd FileType javascript setlocal omnifunc=ale#completion#OmniFunc
+  autocmd FileType typescript setlocal omnifunc=ale#completion#OmniFunc
+augroup end
+let g:ale_completion_delay = 100
+let g:ale_echo_msg_format = '[%linter%] %s [%severity%]'
 
 " Terraform Configuration
 let g:terraform_fmt_on_save = 1
 let g:terraform_align = 1
 
 "----------------------------------------------------
-"NERDTREE CONFIG
-"automatically starts nerdtree if no file specified
-autocmd StdinReadPre * let s:std_in=1
-autocmd VimEnter * if argc() == 0 && !exists("s:std_in") | NERDTree | endif
-"automatically close vim if nerdtree is only remaining window open
-autocmd bufenter * if (winnr("$") == 1 && exists("b:NERDTreeType") && b:NERDTreeType == "primary") | q | endif
-"shortcut to start nerdtree
-map <C-n> :NERDTreeToggle<CR>
 
-"CWD to current folder when open file
-autocmd BufEnter * silent! lcd %:p:h
+" Python config
+function! DetectVirtualEnv()
+    if exists("$VIRTUAL_ENV")
+        let g:ale_python_black_executable = $VIRTUAL_ENV . '/bin/black'
+        let g:ale_python_flake8_executable = $VIRTUAL_ENV . '/bin/flake8'
+        let g:ale_python_isort_executable = $VIRTUAL_ENV . '/bin/isort'
+        let g:ale_python_mypy_executable = $VIRTUAL_ENV . '/bin/mypy'
+    endif
+endfunction
+let g:ale_python_pylsp_executable = 'pylsp'
+let g:ale_python_pylsp_use_global = 1
+let g:ale_python_pylsp_config = {
+\   'pylsp': {
+\     'plugins': {
+\       'pycodestyle': {'enabled': v:false},
+\       'mccabe': {'enabled': v:false},
+\       'pyflakes': {'enabled': v:false},
+\       'flake8': {'enabled': v:false},
+\       'autopep8': {'enabled': v:false},
+\       'yapf': {'enabled': v:false},
+\       'pylint': {'enabled': v:false},
+\       'ruff': {
+\         'enabled': v:true,
+\         'lineLength': 88,
+\         'select': ['E', 'W', 'F', 'I', 'UP', 'B', 'C4', 'SIM', 'PIE'],
+\         'ignore': ['E501', 'W503', 'E203']
+\       }
+\     }
+\   }
+\}
+augroup python_config
+  autocmd!
+  autocmd BufWritePre *.py ALEFix
+  autocmd FileType python setlocal tabstop=4 shiftwidth=4 expandtab
+  autocmd FileType python setlocal textwidth=88
+  " autocmd FileType python setlocal colorcolumn=89
+augroup end
+augroup python_venv
+  autocmd!
+  autocmd FileType python call DetectVirtualEnv()
+augroup end
+"----------------------------------------------------
+" === nerdtree CONFIG ===
+
+" Automatically start NERDTree if no file is specified
+autocmd StdinReadPre * let s:std_in = 1
+autocmd VimEnter * if argc() == 0 && !exists("s:std_in") | NERDTree | endif
+
+" Close Vim if NERDTree is the only remaining window
+autocmd BufEnter * if (winnr('$') == 1 && exists('b:NERDTreeType') && b:NERDTreeType == 'primary') | q | endif
+
+" Toggle NERDTree without creating an extra buffer
+function! ToggleNERDTreeSmart()
+  if exists("t:NERDTreeBufName") && bufwinnr(t:NERDTreeBufName) != -1
+    NERDTreeToggle
+  else
+    NERDTreeToggle
+    if bufname('%') !=# '' && &filetype !=# 'nerdtree'
+      NERDTreeFind
+    endif
+  endif
+endfunction
+" noremap <leader>nt<ESC>:NERDTreeCWD<CR> #not working
+
+nnoremap <C-n> :call ToggleNERDTreeSmart()<CR>
+
+" Position and cleanup settings
+let g:NERDTreeWinPos = "left"
+let g:NERDTreeAutoDeleteBuffer = 1
+
+" Change working directory only for real files, not NERDTree or empty buffers
+autocmd BufEnter * if &buftype == '' && &filetype !=# 'nerdtree' && expand('%') !=# '' | silent! lcd %:p:h | endif
+
+
 
 "-------------------------------------
 "FUGITIVE CONFIG
@@ -371,6 +439,10 @@ augroup filetype
         au! BufRead,BufNewFile *.acl        set filetype=ciscoacl
         au! BufRead,BufNewFile *.tfvars.*   set filetype=terraform
         au! BufRead,BufNewFile *.xbrl       set filetype=xml
+        au! BufRead,BufNewFile Dockerfile*  set filetype=dockerfile
+        au! BufRead,BufNewFile .env.*       set filetype=sh
+        au! BufRead,BufNewFile *.template   set filetype=yaml
+
 augroup END
 
 " for syntax highlighting for go templates for hugo
@@ -401,16 +473,60 @@ let g:ctrlp_custom_ignore = {
   \ 'dir':  '\v[\/](\.git|\.hg|\.svn|node_modules|__pycache__|\.pytest_cache|venv|\.venv)$',
   \ 'file': '\v\.(exe|so|dll|pyc)$',
   \ }
+" let g:ctrlp_working_path_mode = 0  " Keep working directory unchanged
 
 " File type specific settings
-au BufNewFile,BufRead Dockerfile* set filetype=dockerfile
-au BufNewFile,BufRead .env.* set filetype=sh
-au BufNewFile,BufRead *.template set filetype=yaml
 
 " tell autoswap.vim about tmux
 let g:autoswap_detect_tmux = 1
 
 " https://webpack.js.org/configuration/watch/#vim
 :set backupcopy=yes
+
+" Extend JavaScript / TypeScript comment syntax to recognize custom JSDoc tags
+augroup jsdoc_custom_tags
+  autocmd!
+  autocmd FileType javascript,typescript,typescriptreact call JsDocCustomTags()
+augroup END
+
+function! JsDocCustomTags()
+  syn match jsDocCustomTag "* @flow-\w\+"
+  hi def link jsDocCustomTag jsDocTags
+endfunction
+
+command! -nargs=+ FlowComment call InsertFlowComment(<f-args>)
+
+function! InsertFlowComment(step, type)
+  " Build the full comment block as a list
+  let l:comment = [
+        \ '/**',
+        \ ' * @flow-step ' . a:step,
+        \ ' * @flow-type ' . a:type,
+        \ ' * @flow-group ',
+        \ ' * @flow-trigger ',
+        \ ' * @flow-next ',
+        \ ' * @flow-condition ',
+        \ ' * @flow-previous ',
+        \ ' * @flow-previous-condition ',
+        \ ' * @flow-desc ',
+        \ ' */'
+        \ ]
+
+  " Insert the block above current line
+  call append(line('.') - 1, l:comment)
+
+  " Auto-indent the inserted block
+  execute (line('.') - len(l:comment)) . ',' . (line('.') - 1) . 'normal ='
+endfunction
+" Map <Leader>fc to prompt
+nnoremap <silent> <Leader>fc :call FlowCommentPrompt()<CR>
+
+function! FlowCommentPrompt()
+  let l:step = input('Flow Step: ')
+  let l:type = input('Flow Type: ')
+  execute 'FlowComment ' . l:step . ' ' . l:type
+endfunction
+
+autocmd BufNewFile,BufRead *.jsonl set filetype=json
 
 command! PrettifySvg %!prettier --parser html --print-width 130

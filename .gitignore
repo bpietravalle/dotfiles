@@ -8,3 +8,4 @@ bin/**
 *.swp
 *.swo
 *.swn
+.zsh/cache
