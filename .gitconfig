@@ -15,7 +15,7 @@
    prune = true
 [core]
   editor = vim
-  exludesfile = ~/.gitignore
+  excludesfile = ~/.gitignore
 [color "diff"]
   meta = yellow bold
   frag = magenta bold

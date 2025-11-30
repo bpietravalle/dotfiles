@@ -1,5 +1,6 @@
-bin/**
 .DS_Store
+.serena
+.claude
 .yarn
 *.swp
 *.swo

@@ -1,8 +1,9 @@
-function restart_docker () {
-  # on mac
-  os_run "
-  safe_bg_start 'Docker Desktop'
-  "
-  # on linux
-}
+# Docker utilities
 
+restart_docker() {
+  if [[ "$(uname)" == "Darwin" ]]; then
+    open -a "Docker Desktop"
+  else
+    sudo systemctl restart docker
+  fi
+}

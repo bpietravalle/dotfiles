@@ -69,4 +69,4 @@ alias tfw='terraform workspace'
 alias tfa='terraform apply'
 alias claude="~/.claude/local/claude"
 alias pip="pip3"
-alias clean-claude='rm -f ~/.claude/shell-snapshots/*.sh'
+# Claude shell management moved to ~/.zsh/claude.zsh

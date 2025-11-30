@@ -5,11 +5,11 @@
 autoload -Uz compinit && compinit
 zmodload -i zsh/complist
 
-# Added completions for specific libraries
-eval "$(register-python-argcomplete pipx)"
-eval "$(_POLICY_SENTRY_COMPLETE=source policy_sentry)"
-eval "$(eksctl completion zsh)"
-eval "$(kubectl completion zsh)"
+# Added completions for specific libraries (with guards)
+command -v pipx &>/dev/null && command -v register-python-argcomplete &>/dev/null && eval "$(register-python-argcomplete pipx)"
+command -v policy_sentry &>/dev/null && eval "$(_POLICY_SENTRY_COMPLETE=source policy_sentry)"
+command -v eksctl &>/dev/null && eval "$(eksctl completion zsh)"
+command -v kubectl &>/dev/null && eval "$(kubectl completion zsh)"
 
 # temporary debug
 # zstyle ':completion:*' verbose yes

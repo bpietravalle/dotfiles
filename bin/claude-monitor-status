@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Quick tmux status line helper for Claude Monitor
+# Usage: Add to status-right: #(~/bin/claude-monitor-status)
+# Returns: "⏳ 3" if 3 instances waiting, empty if none
+
+MONITOR_DIR="${HOME}/.claude/monitor"
+COUNT_FILE="${MONITOR_DIR}/waiting_count"
+
+# Only show if count file exists and has content
+if [[ -f "$COUNT_FILE" ]]; then
+    count=$(cat "$COUNT_FILE" 2>/dev/null)
+    if [[ -n "$count" && "$count" -gt 0 ]]; then
+        echo "⏳ ${count}"
+    fi
+fi

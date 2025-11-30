@@ -1,16 +1,19 @@
 SSH_USER_CONFIG=$HOME/.ssh/config
 SSH_ID_DIR=$HOME/.ssh
 
+# Helper functions
+_find_pid() { pgrep -x "$1" 2>/dev/null | head -1; }
+_check_pid_running() { [[ -n "$1" ]] && kill -0 "$1" 2>/dev/null; }
+
 # Avoid actions when using Mac OS Keychain
 if [[ ! $SSH_AUTH_SOCK =~ "com\.apple\.launchd" ]]; then
-  export SSH_AGENT_PID=$(find_pid 'ssh-agent')
+  export SSH_AGENT_PID=$(_find_pid 'ssh-agent')
 
   if [[ -z "$SSH_AGENT_PID" ]]; then
-    export SSH_AGENT_PID=$(find_pid '.*ssh-agent')
+    export SSH_AGENT_PID=$(pgrep -f 'ssh-agent' 2>/dev/null | head -1)
   fi
 
-  check_pid_running $SSH_AGENT_PID
-  if [[ "$?" -gt 0 ]]; then
+  if ! _check_pid_running "$SSH_AGENT_PID"; then
     unset SSH_AGENT_PID
 
     export SSH_AUTH_SOCK=$HOME/.ssh/auth_socket
@@ -26,27 +29,26 @@ if [[ ! $SSH_AUTH_SOCK =~ "com\.apple\.launchd" ]]; then
   fi
 fi
 
-if [[ -n $(ls $SSH_ID_DIR) ]]; then
-  # get ssh-add command and the keys in ssh-agent
-  SSH_ADD=$(which ssh-add)
-  keys=$($SSH_ADD -l | cut -d " " -f 3)
+# Add SSH keys not already in agent
+if [[ -d "$SSH_ID_DIR" ]]; then
+  SSH_ADD=$(command -v ssh-add)
+  keys=$($SSH_ADD -l 2>/dev/null | cut -d " " -f 3)
 
-  # go through all files in $SSH_ID_DIR
   add_key=()
-  for k_file in `ls $SSH_ID_DIR/*`; do
+  for k_file in "$SSH_ID_DIR"/*; do
+    [[ -f "$k_file" ]] || continue
     if [[ "$k_file" =~ "rsa" && ! "$k_file" =~ ".pub" ]]; then
       if [[ ! $keys =~ $k_file ]]; then
-        add_key[$(($#add_key +1))]=$k_file
+        add_key+=("$k_file")
       fi
     fi
   done
-  if [[ -n "$add_key" ]]; then
-    {$SSH_ADD $add_key } &>/dev/null
+
+  if [[ ${#add_key[@]} -gt 0 ]]; then
+    $SSH_ADD "${add_key[@]}" &>/dev/null
   fi
 
-  unset SSH_ADD
-  unset add_key
-  unset keys
+  unset SSH_ADD add_key keys
 fi
 
 add_ssh_key_by_fpath() {

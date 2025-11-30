@@ -15,6 +15,7 @@ source ~/.zsh/git.zsh
 source ~/.zsh/ssh.zsh
 source ~/.zsh/zsh-nvm.plugin.zsh
 source ~/.zsh/timemachine.zsh
+source ~/.zsh/claude.zsh
 # source ~/.zsh/plugins.zsh
 # source ~/.zsh/aws.zsh
 

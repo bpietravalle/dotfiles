@@ -14,7 +14,7 @@ EXCLUDE_NAMES=(
     ".oh-my-zsh"
     ".nvm"
     ".config/yarn"
-    ".yarn",
+    ".yarn"
     ".ipynb_checkpoints"
     ".cache/pip"
     ".conda"

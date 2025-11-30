@@ -112,8 +112,9 @@ function strip_diff_leading_symbols {
 # :e foo.md
 # :q
 ## Print a horizontal rule
-rule () {
-  printf "%$(tput cols)s\n"|tr " " "─"}}
+rule() {
+  printf "%$(tput cols)s\n" | tr " " "─"
+}
 
 
 
