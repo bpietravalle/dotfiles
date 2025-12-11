@@ -11,52 +11,22 @@ CLAUDE_SETTINGS_LOCAL="$HOME/.claude/settings.local.json"
 
 claude-util() {
   local cmd="${1:-help}"
-  shift 2>/dev/null
+  shift 2>/dev/null || true
 
   case "$cmd" in
-    # Status/health
-    status|health)
-      _claude_health
+    # Snapshot management
+    snap|snapshot)
+      _claude_snap "$@"
       ;;
 
-    # Quick fix
-    fix)
-      claude-shell-cleanup.sh fix
-      claude-shell-watcher.sh restart
-      ;;
-
-    # Emergency nuke
-    nuke)
-      rm -f "$CLAUDE_SNAPSHOT_DIR"/*.sh 2>/dev/null
-      echo "All snapshots deleted"
-      ;;
-
-    # Watcher management
-    watch|watcher)
-      local subcmd="${1:-status}"
-      claude-shell-watcher.sh "$subcmd" "${@:2}"
-      ;;
-
-    # Cleanup management
-    clean|cleanup)
-      local subcmd="${1:-status}"
-      claude-shell-cleanup.sh "$subcmd" "${@:2}"
+    # Unified watcher control
+    watch)
+      _claude_watch "$@"
       ;;
 
     # Permissions management
     perm|permissions)
       claude-permissions.js "$@"
-      ;;
-
-    # Monitor management
-    monitor|mon)
-      local subcmd="${1:-status}"
-      shift 2>/dev/null || true
-      case "$subcmd" in
-        -f|foreground) claude-monitor-daemon foreground ;;
-        -fv)           claude-monitor-daemon -fv ;;
-        *)             claude-monitor-daemon "$subcmd" "$@" ;;
-      esac
       ;;
 
     # TTY recovery (run from another session)
@@ -83,10 +53,255 @@ claude-util() {
 }
 
 # ═══════════════════════════════════════════════════════════════
+# SNAP - Snapshot Management
+# ═══════════════════════════════════════════════════════════════
+
+_claude_snap() {
+  local subcmd="${1:-status}"
+  shift 2>/dev/null || true
+  
+  case "$subcmd" in
+    status)
+      local total=0 corrupted=0
+      for f in "$CLAUDE_SNAPSHOT_DIR"/*.sh(N); do
+        [[ -f "$f" ]] || continue
+        total=$((total + 1))
+        sed -n '4903p' "$f" 2>/dev/null | grep -qx '[[:space:]]*}[[:space:]]*' && corrupted=$((corrupted + 1))
+      done
+      echo "Snapshots: $total total, $corrupted corrupted"
+      [[ $corrupted -gt 0 ]] && echo "Run 'claude-util snap fix' to repair"
+      ;;
+    fix)
+      claude-shell-cleanup.sh fix
+      ;;
+    nuke)
+      rm -f "$CLAUDE_SNAPSHOT_DIR"/*.sh 2>/dev/null
+      echo "All snapshots deleted"
+      ;;
+    help|--help|-h)
+      cat <<'EOF'
+claude-util snap - Snapshot management
+
+Usage: claude-util snap <command>
+
+Commands:
+  status    Show snapshot health
+  fix       Repair corrupted snapshots
+  nuke      Delete all snapshots (emergency)
+EOF
+      ;;
+    *)
+      echo "Unknown snap command: $subcmd"
+      echo "Run 'claude-util snap help' for usage"
+      return 1
+      ;;
+  esac
+}
+
+# ═══════════════════════════════════════════════════════════════
+# WATCH - Unified Watcher Control
+# ═══════════════════════════════════════════════════════════════
+
+_claude_watch() {
+  local subcmd="${1:-list}"
+  shift 2>/dev/null || true
+  
+  case "$subcmd" in
+    list|ls)
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      echo "Claude Watchers"
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      printf "%-12s %-10s %s\n" "WATCHER" "STATUS" "DETAILS"
+      echo "────────────────────────────────────────────────────────────"
+      
+      # Shell watcher
+      if [[ -f /tmp/claude-shell-watcher.pid ]] && ps -p "$(cat /tmp/claude-shell-watcher.pid 2>/dev/null)" &>/dev/null; then
+        printf "%-12s \033[0;32m%-10s\033[0m %s\n" "shell" "RUNNING" "Snapshot monitoring"
+      else
+        printf "%-12s \033[0;31m%-10s\033[0m %s\n" "shell" "STOPPED" "Snapshot monitoring"
+      fi
+      
+      # Monitor watcher
+      if [[ -f ~/.claude/monitor/daemon.pid ]] && ps -p "$(cat ~/.claude/monitor/daemon.pid 2>/dev/null)" &>/dev/null; then
+        printf "%-12s \033[0;32m%-10s\033[0m %s\n" "monitor" "RUNNING" "Claude instance monitoring"
+      else
+        printf "%-12s \033[0;31m%-10s\033[0m %s\n" "monitor" "STOPPED" "Claude instance monitoring"
+      fi
+      
+      # Procs watcher
+      if [[ -f ~/.claude/procs/watcher.pid ]] && ps -p "$(cat ~/.claude/procs/watcher.pid 2>/dev/null)" &>/dev/null; then
+        printf "%-12s \033[0;32m%-10s\033[0m %s\n" "procs" "RUNNING" "Vitest memory cleanup"
+      else
+        printf "%-12s \033[0;31m%-10s\033[0m %s\n" "procs" "STOPPED" "Vitest memory cleanup"
+      fi
+      
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      ;;
+      
+    start)
+      local watcher="${1:-all}"
+      case "$watcher" in
+        all)
+          claude-shell-watcher.sh start
+          claude-monitor-watcher.sh start
+          claude-procs-watcher.sh start
+          ;;
+        shell)   claude-shell-watcher.sh start ;;
+        monitor) claude-monitor-watcher.sh start ;;
+        procs)   claude-procs-watcher.sh start "${@:2}" ;;
+        *)
+          echo "Unknown watcher: $watcher"
+          echo "Available: all, shell, monitor, procs"
+          return 1
+          ;;
+      esac
+      ;;
+      
+    stop)
+      local watcher="${1:-all}"
+      case "$watcher" in
+        all)
+          claude-shell-watcher.sh stop
+          claude-monitor-watcher.sh stop
+          claude-procs-watcher.sh stop
+          ;;
+        shell)   claude-shell-watcher.sh stop ;;
+        monitor) claude-monitor-watcher.sh stop ;;
+        procs)   claude-procs-watcher.sh stop ;;
+        *)
+          echo "Unknown watcher: $watcher"
+          echo "Available: all, shell, monitor, procs"
+          return 1
+          ;;
+      esac
+      ;;
+      
+    restart)
+      local watcher="${1:-all}"
+      case "$watcher" in
+        all)
+          claude-shell-watcher.sh restart
+          claude-monitor-watcher.sh restart
+          claude-procs-watcher.sh restart
+          ;;
+        shell)   claude-shell-watcher.sh restart ;;
+        monitor) claude-monitor-watcher.sh restart ;;
+        procs)   claude-procs-watcher.sh restart "${@:2}" ;;
+        *)
+          echo "Unknown watcher: $watcher"
+          echo "Available: all, shell, monitor, procs"
+          return 1
+          ;;
+      esac
+      ;;
+      
+    status)
+      local watcher="${1:-}"
+      if [[ -z "$watcher" ]]; then
+        _claude_watch list
+      else
+        case "$watcher" in
+          shell)   claude-shell-watcher.sh status ;;
+          monitor) claude-monitor-watcher.sh status ;;
+          procs)   claude-procs-watcher.sh status ;;
+          *)
+            echo "Unknown watcher: $watcher"
+            echo "Available: shell, monitor, procs"
+            return 1
+            ;;
+        esac
+      fi
+      ;;
+      
+    logs)
+      local watcher="${1:-}"
+      local lines="${2:-50}"
+      case "$watcher" in
+        shell)   claude-shell-watcher.sh logs "$lines" 2>/dev/null || echo "No logs" ;;
+        monitor) claude-monitor-watcher.sh logs "$lines" ;;
+        procs)   claude-procs-watcher.sh logs "$lines" ;;
+        "")
+          echo "Usage: claude-util watch logs <watcher> [lines]"
+          echo "Available: shell, monitor, procs"
+          ;;
+        *)
+          echo "Unknown watcher: $watcher"
+          ;;
+      esac
+      ;;
+      
+    # Monitor shortcuts
+    -f|foreground)
+      claude-monitor-watcher.sh foreground
+      ;;
+    -fv)
+      claude-monitor-watcher.sh -fv
+      ;;
+    goto)
+      claude-monitor-watcher.sh goto "$@"
+      ;;
+    back)
+      claude-monitor-watcher.sh back
+      ;;
+      
+    help|--help|-h)
+      cat <<'EOF'
+claude-util watch - Unified watcher control
+
+Usage: claude-util watch <command> [watcher] [options]
+
+Commands:
+  list              Show all watcher statuses (default)
+  start [watcher]   Start watcher(s) (default: all)
+  stop [watcher]    Stop watcher(s) (default: all)
+  restart [watcher] Restart watcher(s) (default: all)
+  status [watcher]  Show detailed status
+  logs <watcher> [n] Show last n log lines
+
+Watchers:
+  all      All watchers
+  shell    Snapshot monitoring
+  monitor  Claude instance monitoring
+  procs    Vitest memory cleanup
+
+Monitor Shortcuts:
+  -f       Run monitor in foreground
+  -fv      Run monitor verbose dashboard
+  goto     Jump to Claude instance
+  back     Return from instance
+
+Examples:
+  claude-util watch                   # List all statuses
+  claude-util watch start             # Start all watchers
+  claude-util watch start procs 2048  # Start procs with 2GB threshold
+  claude-util watch stop monitor      # Stop only monitor
+  claude-util watch -fv               # Verbose dashboard
+EOF
+      ;;
+      
+    *)
+      echo "Unknown watch command: $subcmd"
+      echo "Run 'claude-util watch help' for usage"
+      return 1
+      ;;
+  esac
+}
+
+# ═══════════════════════════════════════════════════════════════
 # INTERNAL FUNCTIONS
 # ═══════════════════════════════════════════════════════════════
 
 _claude_health() {
+  # Deprecated - use 'claude-util snap status' and 'claude-util watch list'
+  echo "Note: Use 'claude-util snap status' for snapshots"
+  echo "      Use 'claude-util watch' for watcher status"
+  echo ""
+  _claude_snap status
+  echo ""
+  _claude_watch list
+}
+
+_claude_health_legacy() {
   local total=0 corrupted=0
 
   for f in "$CLAUDE_SNAPSHOT_DIR"/*.sh(N); do
@@ -110,61 +325,59 @@ claude-util - Claude Code utilities
 
 Usage: claude-util <command> [args]
 
-Commands:
-  status              Health check (snapshots + watcher)
-  fix                 Fix corrupted snapshots + restart watcher
-  nuke                Delete all snapshots (emergency)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SNAPSHOT MANAGEMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  snap status         Show snapshot health
+  snap fix            Repair corrupted snapshots
+  snap nuke           Delete all snapshots (emergency)
 
-  watch [cmd]         Watcher management (start|stop|status|logs)
-  clean [cmd]         Cleanup management (fix|delete|status)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WATCHER CONTROL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  watch               List all watcher statuses
+  watch start [w]     Start watcher(s) (all|shell|monitor|procs)
+  watch stop [w]      Stop watcher(s)
+  watch restart [w]   Restart watcher(s)
+  watch status [w]    Show detailed status
+  watch logs <w> [n]  Show last n log lines
 
-  perm show           Show global + local permission counts
-  perm merge          Merge global → local (deny > ask > allow)
-  perm diff           Show differences in allow arrays
-  perm --global show  Show all projects in ~/projects/ ~/dev/
-  perm --global diff  Show which projects need merge
-  perm --global merge Merge global perms into ALL projects
+  Watchers:
+    shell   - Snapshot monitoring
+    monitor - Claude instance monitoring  
+    procs   - Vitest memory cleanup (1GB threshold)
 
-  monitor start           Start monitoring Claude instances (background daemon)
-  monitor stop            Stop monitoring + kill orphaned processes
-  monitor restart         Restart monitoring daemon
-  monitor status          Show monitor status
-  monitor list            List all Claude instances and their state
-  monitor goto <session>  Jump to a specific session's Claude pane
-  monitor back            Switch back to running monitor dashboard (C-a B)
-  monitor -f              Foreground mode with live display (simple)
-  monitor -fv             Verbose dashboard mode (output preview, persistent)
-  monitor attach          Same as -f
-  monitor verbosity [lvl] Get/set notification level (silent|minimal|verbose)
-  monitor debug [on|off]  Toggle debug logging (off cleans up log file)
-  monitor logs [n]        Show last n lines of debug log (default: 50)
+  Monitor Shortcuts:
+    watch -fv           Verbose dashboard (recommended)
+    watch goto <sess>   Jump to session
+    watch back          Return to dashboard
 
-  unfreeze [pane]     Kill monitor + reset frozen pane TTY (run from other session)
-
-  procs list [opts]   List all node/python processes with details
-  procs test [opts]   List only test runners (vitest, jest, pytest)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PROCESS MANAGEMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  procs               Show help
+  procs list [opts]   List processes (--all --oldest --max-mem --count N)
+  procs test [opts]   List test runners only
   procs kill <pid>    Kill specific process
-  procs clean         Interactive cleanup (safe kill of test processes)
+  procs clean         Interactive cleanup
 
-  List options: --oldest | --max-mem | --max-cpu | --count N
-
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OTHER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  perm [cmd]          Permission management (show|merge|diff)
+  unfreeze [pane]     Fix frozen pane TTY (run from other session)
   help                Show this help
 
-Verbose Dashboard Keys:
-  1-9     Jump to numbered instance (dashboard keeps running)
-  r       Refresh display (fix visual glitches)
-  q       Quit dashboard
-  C-a B   Return to dashboard (tmux binding)
-
-Examples:
-  claude-util status
-  claude-util fix
-  claude-util monitor -fv              # Verbose dashboard (recommended)
-  claude-util monitor goto myproject   # Jump to session
-  claude-util monitor debug on         # Enable debug logging
-  claude-util unfreeze dotfiles:0.1    # Fix frozen pane
-  claude-util watch start
-  claude-util permissions merge
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  claude-util snap status            # Check snapshot health
+  claude-util watch                  # List all watcher statuses
+  claude-util watch start            # Start all watchers
+  claude-util watch -fv              # Verbose dashboard
+  claude-util watch start procs 2048 # Start procs with 2GB threshold
+  claude-util procs list --all       # List all processes
+  claude-util procs list --oldest    # Longest running
 EOF
 }
 
@@ -208,7 +421,7 @@ claude-unfreeze() {
   echo "Killing monitor processes..."
 
   # Kill any running monitor daemons
-  local pids=$(pgrep -f 'claude-monitor-daemon' 2>/dev/null || true)
+  local pids=$(pgrep -f 'claude-monitor-watcher.sh' 2>/dev/null || true)
   if [[ -n "$pids" ]]; then
     echo "$pids" | while read pid; do
       kill "$pid" 2>/dev/null && killed=$((killed + 1))
@@ -250,8 +463,15 @@ claude-unfreeze() {
 # ═══════════════════════════════════════════════════════════════
 
 claude-procs() {
-  local mode="${1:-list}"
-  shift
+  local mode="${1:-}"
+  
+  # No args = show help (same as claude-util pattern)
+  if [[ -z "$mode" ]]; then
+    _claude_procs_help
+    return 0
+  fi
+  
+  shift 2>/dev/null || true
   
   case "$mode" in
     list|ls)
@@ -260,61 +480,66 @@ claude-procs() {
     test|tests)
       _claude_procs_list --filter test "$@"
       ;;
+    agent|agents)
+      _claude_procs_list --filter agent "$@"
+      ;;
     kill)
       _claude_procs_kill "$@"
       ;;
     clean|cleanup)
       _claude_procs_interactive_cleanup
       ;;
-    *)
+    watch)
+      _claude_procs_watch "$@"
+      ;;
+    help|--help|-h)
       _claude_procs_help
+      ;;
+    *)
+      echo "Unknown command: $mode"
+      echo "Run 'claude-procs help' for usage"
+      return 1
       ;;
   esac
 }
 
 _claude_procs_help() {
   cat <<'EOF'
-claude-procs - Manage node/python processes (find runaway tests)
+claude-procs - Manage node/python/agent processes
 
 Usage: claude-procs <command> [options]
 
 Commands:
-  list [options]   List all node/python processes with details
-  test [options]   List only test runners (vitest, jest, pytest)
-  kill <pid>       Kill specific process by PID
-  kill [options]   Bulk kill processes (shows preview + confirmation)
-  clean            Interactive cleanup (safe kill of test processes)
+  list [opts]    List processes (default: top 5)
+  test [opts]    List test runners only
+  kill <pid>     Kill specific PID
+  kill [opts]    Bulk kill with preview (kills process trees)
+  clean          Interactive cleanup
 
-List Options:
-  --oldest         Sort by runtime (longest first)
-  --max-mem        Sort by memory usage (highest first)
-  --max-cpu        Sort by CPU usage (highest first)
-  --count N        Show top N results (default: 5)
+Options (list & kill):
+  --type, -t T   Filter by type (see below)
+  --all, -a      Show all (no limit)
+  --oldest       Sort by age (longest first)
+  --largest      Sort by memory (highest first)
+  --count N      Limit to N results (default: 5)
+  --force, -9    Use SIGKILL (kill only)
 
-Bulk Kill Options:
-  Same as list options (--oldest, --max-mem, --max-cpu, --count)
-  Shows preview list, then asks for confirmation before killing
+Types (for --type):
+  🔒 claude, daemon, mcp, lsp = protected
+  ✅ test, agent = safe to kill
+  ⚠️  dev, other = caution
 
-Process Info Shown:
-  PID       Process ID
-  Runtime   How long it's been running
-  CPU%      CPU usage
-  MEM%      Memory usage
-  Type      test/mcp/dev/lsp/other
-  Location  Working directory
-  Command   What's running
+Tracked: node, python, pdm, vitest, jest, pytest, tsx, npx
 
-Safety:
-  ⚠️  MCP servers are marked and excluded from cleanup
-  ⚠️  Claude Code processes are protected
-  ✅  Test runners (vitest/jest/pytest) are safe to kill
+Auto-Cleanup Daemon:
+  claude-util watch start procs [threshold_mb]
 
 Examples:
-  claude-procs list                    # See all processes (top 5)
-  claude-procs list --oldest           # Longest running processes
-  claude-procs list --max-mem --count 3  # Top 3 memory hogs
-  claude-procs test --oldest           # Longest running tests
-  claude-procs clean                   # Interactive cleanup
+  claude-procs list --all              # All processes
+  claude-procs list --type mcp         # Filter by type
+  claude-procs list --oldest           # Longest running
+  claude-procs kill --largest --count 3  # Kill top 3 memory hogs
+  claude-procs test --oldest           # Shortcut: --type test
   claude-procs kill 12345              # Kill specific PID
 EOF
 }
@@ -329,34 +554,64 @@ _claude_procs_categorize() {
   local cmd="$1"
   local cwd="$2"
   
-  # MCP servers
-  if [[ "$cmd" == *"mcp"* ]] || [[ "$cwd" == *".claude"* ]]; then
+  # Claude Code itself (PROTECTED - never kill)
+  if [[ "$cmd" == *"claude"* && "$cmd" != *"claude-"* ]] || \
+     [[ "$cmd" == *"/claude "* ]] || \
+     [[ "$cmd" == *"anthropic"* ]]; then
+    echo "claude"
+    return
+  fi
+  
+  # Claude utility daemons/watchers (PROTECTED)
+  if [[ "$cmd" == *"claude-"*"watcher"* ]] || \
+     [[ "$cmd" == *"claude-shell-cleanup"* ]]; then
+    echo "daemon"
+    return
+  fi
+  
+  # MCP servers (PROTECTED)
+  if [[ "$cmd" == *"mcp"* ]] || [[ "$cwd" == *".claude"* ]] || [[ "$cwd" == *".emle"* ]] || \
+     [[ "$cmd" == *"serena"* ]] || [[ "$cmd" == *"playwright"* && "$cmd" == *"server"* ]]; then
     echo "mcp"
     return
   fi
   
-  # Test runners
+  # Language servers (PROTECTED)
+  if [[ "$cmd" == *"langserver"* ]] || \
+     [[ "$cmd" == *"pyright"* ]] || \
+     [[ "$cmd" == *"typescript-language"* ]] || \
+     [[ "$cmd" == *"tsserver"* ]] || \
+     [[ "$cmd" == *"eslint"*"server"* ]] || \
+     [[ "$cmd" == *"pylsp"* ]] || \
+     [[ "$cmd" == *"bash-language-server"* ]]; then
+    echo "lsp"
+    return
+  fi
+  
+  # Test runners (SAFE to kill)
   if [[ "$cmd" == *"vitest"* ]] || \
      [[ "$cmd" == *"jest"* ]] || \
      [[ "$cmd" == *"pytest"* ]] || \
-     [[ "$cmd" == *"test"* && "$cmd" == *"run"* ]]; then
+     [[ "$cmd" == *"mocha"* ]] || \
+     [[ "$cmd" == *"test"* && "$cmd" == *"run"* ]] || \
+     [[ "$cmd" == *"node"*"test"* ]]; then
     echo "test"
+    return
+  fi
+  
+  # Agent scripts (SAFE to kill - often orphaned)
+  if [[ "$cmd" == *"bash"* && "$cwd" == *"claude"* ]] || \
+     [[ "$cmd" == *"tsx"* && "$cmd" == *"run"* ]] || \
+     [[ "$cmd" == *"npx"* ]]; then
+    echo "agent"
     return
   fi
   
   # Development servers
   if [[ "$cmd" == *"dev"* ]] || \
      [[ "$cmd" == *"watch"* ]] || \
-     [[ "$cmd" == *"tsx"* ]]; then
+     [[ "$cmd" == *"tsx"* && "$cmd" != *"run"* ]]; then
     echo "dev"
-    return
-  fi
-  
-  # Language servers
-  if [[ "$cmd" == *"langserver"* ]] || \
-     [[ "$cmd" == *"pyright"* ]] || \
-     [[ "$cmd" == *"typescript"* ]]; then
-    echo "lsp"
     return
   fi
   
@@ -423,15 +678,23 @@ _claude_procs_etime_to_seconds() {
   echo "$seconds"
 }
 
+_claude_procs_etime_to_hours() {
+  local etime="$1"
+  local secs=$(_claude_procs_etime_to_seconds "$etime")
+  local hours=$((secs / 3600))
+  echo "${hours}h"
+}
+
 _claude_procs_list() {
   # Parse arguments
   local filter="all"
   local sort_by=""
   local count=0
+  local show_all=0
   
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --filter)
+      --filter|--type|-t)
         filter="$2"
         shift 2
         ;;
@@ -439,7 +702,7 @@ _claude_procs_list() {
         sort_by="time"
         shift
         ;;
-      --max-mem)
+      --max-mem|--largest)
         sort_by="mem"
         shift
         ;;
@@ -451,14 +714,22 @@ _claude_procs_list() {
         count="$2"
         shift 2
         ;;
+      --all|-a)
+        show_all=1
+        shift
+        ;;
       *)
         shift
         ;;
     esac
   done
   
-  # Default count
-  [[ $count -eq 0 ]] && count=5
+  # Default count (unless --all)
+  if [[ $show_all -eq 1 ]]; then
+    count=999999
+  elif [[ $count -eq 0 ]]; then
+    count=5
+  fi
   
   # Collect processes into arrays
   local -a pids etimes cpus mems cmds cwds types warns sort_keys
@@ -508,7 +779,7 @@ _claude_procs_list() {
         sort_keys+=("0")
         ;;
     esac
-  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python' | grep -v grep)
+  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx' | grep -v grep | grep -v '_claude_procs')
   
   # Sort if requested
   if [[ -n "$sort_by" ]]; then
@@ -524,7 +795,7 @@ _claude_procs_list() {
         local idx_i=${indices[$i]}
         local idx_j=${indices[$j]}
         # Compare sort keys (reverse for descending)
-        if [[ "${sort_keys[$idx_i]}" < "${sort_keys[$idx_j]}" ]]; then
+        if (( sort_keys[$idx_i] < sort_keys[$idx_j] )); then
           # Swap
           local temp=${indices[$i]}
           indices[$i]=${indices[$j]}
@@ -544,7 +815,7 @@ _claude_procs_list() {
   echo "Node/Python Processes:"
   [[ -n "$sort_by" ]] && echo "Sorted by: $sort_by (showing top $count)"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  printf "%-4s %-5s %-12s %4s %5s %-8s %-30s %s\n" "WARN" "PID" "RUNTIME" "CPU%" "MEM%" "TYPE" "LOCATION" "COMMAND"
+  printf "%-4s %-5s %6s %4s %5s %-8s %-30s %s\n" "WARN" "PID" "AGE" "CPU%" "MEM%" "TYPE" "LOCATION" "COMMAND"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   
   # Display processes (limited by count)
@@ -567,16 +838,17 @@ _claude_procs_list() {
     short_cwd="${short_cwd:0:30}"
     local short_cmd="${cmd:0:60}"
     
-    printf "%-4s %-5s %-12s %4s%% %4s%% %-8s %-30s %s\n" \
-      "$warn" "$pid" "$etime" "$cpu" "$mem" "$type" "$short_cwd" "$short_cmd"
+    local age=$(_claude_procs_etime_to_hours "$etime")
+    printf "%-4s %-5s %6s %4s%% %4s%% %-8s %-30s %s\n" \
+      "$warn" "$pid" "$age" "$cpu" "$mem" "$type" "$short_cwd" "$short_cmd"
     
     displayed=$((displayed + 1))
   done
   
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "Showing $displayed of ${#pids[@]} processes"
-  echo "Types: test=test runner, mcp=MCP server, dev=dev server, lsp=language server"
-  echo "⚠️  = Long-running or high-memory test process (safe to kill)"
+  echo "Types: 🔒claude/daemon/mcp/lsp=protected  ✅test/agent=safe  ⚠️dev/other=caution"
+  echo "⚠️  = Long-running (>5h) or high-memory (>1%) test process"
 }
 
 _claude_procs_kill() {
@@ -597,6 +869,14 @@ _claude_procs_kill() {
     local type=$(_claude_procs_categorize "$info" "$cwd")
     
     # Safety check
+    if [[ "$type" == "claude" ]]; then
+      echo "🚫 BLOCKED: This is Claude Code itself - cannot kill!"
+      return 1
+    fi
+    if [[ "$type" == "daemon" ]]; then
+      echo "🚫 BLOCKED: This is a Claude utility daemon - use 'claude-util watch stop' instead"
+      return 1
+    fi
     if [[ "$type" == "mcp" ]] || [[ "$type" == "lsp" ]]; then
       echo "⚠️  WARNING: This appears to be an MCP/LSP server!"
       echo "Process: $info"
@@ -619,15 +899,39 @@ _claude_procs_kill() {
   fi
 }
 
+# Kill a process tree (children first, then parent)
+_claude_procs_kill_tree() {
+  local pid="$1"
+  local sig="${2:--9}"  # Default to SIGKILL
+  local killed=0
+
+  # Find all children recursively using pgrep
+  local -a children
+  children=($(pgrep -P "$pid" 2>/dev/null))
+
+  # Kill children first (recursively)
+  for child in "${children[@]}"; do
+    _claude_procs_kill_tree "$child" "$sig"
+    killed=$((killed + $?))
+  done
+
+  # Kill the parent
+  if kill $sig "$pid" 2>/dev/null; then
+    return $((killed + 1))
+  fi
+  return $killed
+}
+
 _claude_procs_bulk_kill() {
-  # Parse arguments (same as list)
+  # Parse arguments
   local filter="all"
   local sort_by=""
   local count=0
+  local force=0
   
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --filter)
+      --filter|--type|-t)
         filter="$2"
         shift 2
         ;;
@@ -635,7 +939,7 @@ _claude_procs_bulk_kill() {
         sort_by="time"
         shift
         ;;
-      --max-mem)
+      --max-mem|--largest)
         sort_by="mem"
         shift
         ;;
@@ -647,6 +951,10 @@ _claude_procs_bulk_kill() {
         count="$2"
         shift 2
         ;;
+      --force|-9)
+        force=1
+        shift
+        ;;
       *)
         shift
         ;;
@@ -656,15 +964,16 @@ _claude_procs_bulk_kill() {
   # Default count
   [[ $count -eq 0 ]] && count=5
   
-  # Collect processes (same logic as list)
-  local -a pids etimes cpus mems cmds cwds types warns sort_keys
+  # Collect processes
+  local -a pids etimes cpus mems cmds cwds types warns sort_keys ppids
   
   while IFS= read -r line; do
     local pid=$(echo "$line" | awk '{print $1}')
-    local etime=$(echo "$line" | awk '{print $2}')
-    local cpu=$(echo "$line" | awk '{print $3}')
-    local mem=$(echo "$line" | awk '{print $4}')
-    local cmd=$(echo "$line" | awk '{for(i=5;i<=NF;i++) printf "%s ", $i; print ""}')
+    local ppid=$(echo "$line" | awk '{print $2}')
+    local etime=$(echo "$line" | awk '{print $3}')
+    local cpu=$(echo "$line" | awk '{print $4}')
+    local mem=$(echo "$line" | awk '{print $5}')
+    local cmd=$(echo "$line" | awk '{for(i=6;i<=NF;i++) printf "%s ", $i; print ""}')
     
     local cwd=$(_claude_procs_get_cwd "$pid")
     local type=$(_claude_procs_categorize "$cmd" "$cwd")
@@ -675,14 +984,15 @@ _claude_procs_bulk_kill() {
     fi
     
     # Skip protected types
-    if [[ "$type" == "mcp" ]] || [[ "$type" == "lsp" ]]; then
+    if [[ "$type" == "claude" ]] || [[ "$type" == "daemon" ]] || [[ "$type" == "mcp" ]] || [[ "$type" == "lsp" ]]; then
       continue
     fi
     
     local warn=$(_claude_procs_should_warn "$type" "$etime" "$mem")
-    
+
     # Store data
     pids+=("$pid")
+    ppids+=("$ppid")
     etimes+=("$etime")
     cpus+=("$cpu")
     mems+=("$mem")
@@ -707,7 +1017,7 @@ _claude_procs_bulk_kill() {
         sort_keys+=("0")
         ;;
     esac
-  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python' | grep -v grep)
+  done < <(ps -eo pid,ppid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx' | grep -v grep | grep -v '_claude_procs')
   
   if [[ ${#pids[@]} -eq 0 ]]; then
     echo "No matching processes found"
@@ -726,7 +1036,7 @@ _claude_procs_bulk_kill() {
       for ((j = i + 1; j <= ${#indices[@]}; j++)); do
         local idx_i=${indices[$i]}
         local idx_j=${indices[$j]}
-        if [[ "${sort_keys[$idx_i]}" < "${sort_keys[$idx_j]}" ]]; then
+        if (( sort_keys[$idx_i] < sort_keys[$idx_j] )); then
           local temp=${indices[$i]}
           indices[$i]=${indices[$j]}
           indices[$j]=$temp
@@ -774,19 +1084,32 @@ _claude_procs_bulk_kill() {
   echo
   [[ "$REPLY" != "y" ]] && return 0
   
-  # Kill processes
-  echo "Killing processes..."
+  # Kill processes (with their children)
+  local kill_sig=""
+  [[ $force -eq 1 ]] && kill_sig="-9"
+  [[ $force -eq 1 ]] && echo "Killing process trees... (SIGKILL)" || echo "Killing process trees..."
   local killed=0
+  local total_killed=0
   for pid in "${kill_pids[@]}"; do
-    if kill "$pid" 2>/dev/null; then
-      echo "✅ Killed $pid"
+    # Count children before killing
+    local child_count=$(pgrep -P "$pid" 2>/dev/null | wc -l | tr -d ' ')
+
+    # Kill the tree
+    if _claude_procs_kill_tree "$pid" "$kill_sig"; then
+      if [[ $child_count -gt 0 ]]; then
+        echo "✅ Killed $pid (+$child_count children)"
+        total_killed=$((total_killed + child_count + 1))
+      else
+        echo "✅ Killed $pid"
+        total_killed=$((total_killed + 1))
+      fi
       killed=$((killed + 1))
     else
       echo "❌ Failed to kill $pid"
     fi
   done
-  
-  echo "Killed $killed of ${#kill_pids[@]} processes"
+
+  echo "Killed $killed process trees ($total_killed total)"
 }
 
 _claude_procs_interactive_cleanup() {
@@ -824,7 +1147,7 @@ _claude_procs_interactive_cleanup() {
       test_pids+=("$pid")
       idx=$((idx + 1))
     fi
-  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python' | grep -v grep)
+  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx' | grep -v grep | grep -v '_claude_procs')
   
   if [[ ${#test_pids[@]} -eq 0 ]]; then
     echo "No test processes found"
@@ -854,4 +1177,112 @@ _claude_procs_interactive_cleanup() {
       done
       ;;
   esac
+}
+
+_claude_procs_watch() {
+  # Parse arguments
+  local threshold_mb=1024
+  local interval=30
+  local dry_run=0
+  local once=0
+  
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --threshold)
+        threshold_mb="$2"
+        shift 2
+        ;;
+      --interval)
+        interval="$2"
+        shift 2
+        ;;
+      --dry-run)
+        dry_run=1
+        shift
+        ;;
+      --once)
+        once=1
+        shift
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+  
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "🔍 Vitest Process Watcher"
+  echo "   Threshold: ${threshold_mb}MB combined | Interval: ${interval}s"
+  [[ $dry_run -eq 1 ]] && echo "   Mode: DRY RUN (no processes will be killed)"
+  echo "   Press Ctrl+C to stop"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo
+  
+  while true; do
+    local total_mem_kb=0
+    local -a vitest_pids vitest_mems vitest_cmds
+    
+    # Get total system memory in KB (macOS)
+    local total_system_mem_kb=$(sysctl -n hw.memsize 2>/dev/null)
+    total_system_mem_kb=$((total_system_mem_kb / 1024))
+    
+    # Find vitest processes
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      local pid=$(echo "$line" | awk '{print $1}')
+      local mem_pct=$(echo "$line" | awk '{print $4}')
+      local cmd=$(echo "$line" | awk '{for(i=5;i<=NF;i++) printf "%s ", $i; print ""}')
+      
+      # Convert percentage to KB
+      local mem_kb=$(echo "$mem_pct $total_system_mem_kb" | awk '{printf "%.0f", $1 * $2 / 100}')
+      
+      vitest_pids+=("$pid")
+      vitest_mems+=("$mem_kb")
+      vitest_cmds+=("$cmd")
+      total_mem_kb=$((total_mem_kb + mem_kb))
+    done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'vitest' | grep -v grep | grep -v '_claude_procs')
+    
+    local total_mem_mb=$((total_mem_kb / 1024))
+    local timestamp=$(date '+%H:%M:%S')
+    
+    if [[ ${#vitest_pids[@]} -eq 0 ]]; then
+      echo "[$timestamp] No vitest processes running"
+    else
+      echo "[$timestamp] Vitest processes: ${#vitest_pids[@]} | Memory: ${total_mem_mb}MB / ${threshold_mb}MB threshold"
+      
+      # Check if threshold exceeded
+      if [[ $total_mem_mb -ge $threshold_mb ]]; then
+        echo "⚠️  THRESHOLD EXCEEDED - cleaning up oldest processes..."
+        
+        # Kill processes until under threshold
+        for i in "${!vitest_pids[@]}"; do
+          local pid="${vitest_pids[$i]}"
+          local mem_mb=$((${vitest_mems[$i]} / 1024))
+          local short_cmd="${vitest_cmds[$i]:0:50}"
+          
+          if [[ $dry_run -eq 1 ]]; then
+            echo "   [DRY RUN] Would kill PID $pid (${mem_mb}MB) - $short_cmd"
+          else
+            if kill "$pid" 2>/dev/null; then
+              echo "   ✅ Killed PID $pid (${mem_mb}MB) - $short_cmd"
+            else
+              echo "   ❌ Failed to kill PID $pid"
+            fi
+          fi
+          
+          # Recalculate remaining memory
+          total_mem_mb=$((total_mem_mb - mem_mb))
+          if [[ $total_mem_mb -lt $threshold_mb ]]; then
+            echo "   Memory now below threshold (${total_mem_mb}MB)"
+            break
+          fi
+        done
+      fi
+    fi
+    
+    # Exit if --once flag
+    [[ $once -eq 1 ]] && break
+    
+    sleep "$interval"
+  done
 }

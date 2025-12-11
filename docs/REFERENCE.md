@@ -179,34 +179,27 @@ tmux send-keys -t dotfiles:0.1 "stty sane; clear" Enter
 
 ## Process Management
 
-Find and kill runaway test processes (vitest, jest, pytest).
+Find and kill runaway processes. Kill uses tree-killing (children first, then parent).
 
 ```bash
-# List processes
-claude-util procs list                    # All (top 5)
-claude-util procs list --oldest           # Longest running first
-claude-util procs list --max-mem          # Highest memory first
-claude-util procs list --max-cpu          # Highest CPU first
-claude-util procs list --count 3          # Show top 3
-claude-util procs test --oldest           # Longest running tests
+# List
+claude-util procs list                    # Top 5
+claude-util procs list -t dev --oldest    # Dev processes by age
+claude-util procs list --largest --all    # All by memory
 
-# Kill processes
-claude-util procs kill 12345              # Kill specific PID
-claude-util procs kill --oldest --count 3 # Bulk kill: oldest 3 (preview + confirmation)
-claude-util procs kill --max-mem          # Bulk kill: top 5 memory hogs
-claude-util procs clean                   # Interactive cleanup (safe)
+# Kill (kills process trees)
+claude-util procs kill 12345              # Specific PID + children
+claude-util procs kill -t dev --oldest    # Oldest dev trees
+claude-util procs kill --force            # Use SIGKILL (-9)
+claude-util procs clean                   # Interactive cleanup
 ```
 
-**Process Types**:
-- `test` → test runners (vitest, jest, pytest)
-- `mcp` → MCP servers (protected from cleanup)
-- `lsp` → language servers (pyright, typescript)
-- `dev` → dev servers (pnpm dev, tsx watch)
+**Types** (`-t`/`--type`):
+- 🔒 `claude`, `daemon`, `mcp`, `lsp` = protected
+- ✅ `test`, `agent` = safe to kill
+- ⚠️ `dev`, `other` = caution
 
-**Warning Indicators**:
-- ⚠️  = Test running >5 hours or >1% memory (safe to kill)
-
-**Safety**: MCP servers and LSP servers excluded from interactive cleanup
+**Flags**: `--oldest`, `--largest`, `--count N`, `--force/-9`, `--all`
 
 ---
 
