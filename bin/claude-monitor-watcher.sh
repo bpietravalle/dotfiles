@@ -128,8 +128,9 @@ find_claude_pane() {
         # Check process name
         local cmd=$(tmux display-message -t "$target" -p "#{pane_current_command}" 2>/dev/null || true)
 
-        # Claude runs as node process
-        if [[ "$cmd" == "node" ]]; then
+        # Native install: pane_current_command is the version number (e.g. "2.1.49")
+        # or "claude" if tmux resolves the symlink differently
+        if [[ "$cmd" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$cmd" == "claude" ]]; then
             # Verify it's actually Claude by checking content
             local content=$(tmux capture-pane -t "$target" -p -S -10 2>/dev/null || true)
             # Look for Claude-specific indicators

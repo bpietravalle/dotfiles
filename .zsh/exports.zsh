@@ -21,15 +21,15 @@ export CARGO_PATH=$HOME/.cargo/bin
 export GO_BIN_PATH=$GOPATH/bin
 export FABRIC_BIN_PATH=$HOME/docs/dev/fabric-samples/bin
 export PYTHON3_BIN=/usr/local/opt/python/libexec/bin/python
-SPARK_VERSION=3.5.1
-export SPARK_HOME=/usr/local/Cellar/apache-spark/$SPARK_VERSION/libexec
-export PYTHONPATH=/usr/local/Cellar/apache-spark/$SPARK_VERSION/libexec/python/:$PYTHONP$
+export JAVA_HOME=/usr/libexec/java_home
+MYSQL_PATH=/opt/homebrew/opt/mysql-client/bin
 PG_APP_PATH=/Applications/Postgres.app/Contents/Versions/latest/bin
 DOCKER_PATH=$HOME/.docker/bin
 BREW=/opt/homebrew/bin
 TFENV="$HOME/.tfenv/bin"
 CLAUDE_DIR="$HOME/.claude/local"
-export PATH=$BREW:$RBENV_PATH:$CONFIG_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PYTHON_BIN:$PYTHON3_BIN:$PG_APP_PATH:$SPARK_HOME:$DOCKER_PATH:$TFENV:$CLAUDE_DIR:$PATH
+export RVT_DOCS="$HOME/projects/rvt-docs"
+export PATH=$BREW:$RBENV_PATH:$CONFIG_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PYTHON_BIN:$PYTHON3_BIN:$PG_APP_PATH:$DOCKER_PATH:$TFENV:$JAVA_HOME:$CLAUDE_DIR:$MYSQL_PATH:$PATH
 
 # this is for mac
 # export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools

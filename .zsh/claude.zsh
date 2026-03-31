@@ -26,7 +26,7 @@ claude-util() {
 
     # Permissions management
     perm|permissions)
-      claude-permissions.js "$@"
+      claude-perm "$@"
       ;;
 
     # TTY recovery (run from another session)
@@ -364,7 +364,7 @@ PROCESS MANAGEMENT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OTHER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  perm [cmd]          Permission management (show|merge|diff)
+  perm [cmd]          Permission management (hooks|show|merge|diff)
   unfreeze [pane]     Fix frozen pane TTY (run from other session)
   help                Show this help
 
@@ -555,9 +555,9 @@ _claude_procs_categorize() {
   local cwd="$2"
   
   # Claude Code itself (PROTECTED - never kill)
-  if [[ "$cmd" == *"claude"* && "$cmd" != *"claude-"* ]] || \
-     [[ "$cmd" == *"/claude "* ]] || \
-     [[ "$cmd" == *"anthropic"* ]]; then
+  # Native install: ~/.local/bin/claude or ~/.local/share/claude/versions/X.Y.Z
+  if [[ "$cmd" == *".local/bin/claude"* ]] || \
+     [[ "$cmd" == *".local/share/claude/"* ]]; then
     echo "claude"
     return
   fi
@@ -779,7 +779,7 @@ _claude_procs_list() {
         sort_keys+=("0")
         ;;
     esac
-  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx' | grep -v grep | grep -v '_claude_procs')
+  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx|\.local/bin/claude|\.local/share/claude' | grep -v grep | grep -v '_claude_procs')
   
   # Sort if requested
   if [[ -n "$sort_by" ]]; then
@@ -1017,7 +1017,7 @@ _claude_procs_bulk_kill() {
         sort_keys+=("0")
         ;;
     esac
-  done < <(ps -eo pid,ppid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx' | grep -v grep | grep -v '_claude_procs')
+  done < <(ps -eo pid,ppid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx|\.local/bin/claude|\.local/share/claude' | grep -v grep | grep -v '_claude_procs')
   
   if [[ ${#pids[@]} -eq 0 ]]; then
     echo "No matching processes found"
@@ -1147,7 +1147,7 @@ _claude_procs_interactive_cleanup() {
       test_pids+=("$pid")
       idx=$((idx + 1))
     fi
-  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx' | grep -v grep | grep -v '_claude_procs')
+  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx|\.local/bin/claude|\.local/share/claude' | grep -v grep | grep -v '_claude_procs')
   
   if [[ ${#test_pids[@]} -eq 0 ]]; then
     echo "No test processes found"

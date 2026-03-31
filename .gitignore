@@ -10,3 +10,8 @@
 *.swo
 *.swn
 .zsh/cache
+
+# rvt-ops symlinks (private repo, managed by rvt-ops/scripts/setup.sh)
+bin/cc-integrate
+bin/cc-launch
+bin/cc-project

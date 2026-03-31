@@ -23,7 +23,7 @@
   new = green bold
 [alias]
   br = branch
-  cm = commit -am
+  cm = cherry master
   co = checkout
   cp = cherry-pick
   dump = cat-file -p

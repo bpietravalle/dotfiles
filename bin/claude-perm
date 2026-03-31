@@ -1,0 +1,1422 @@
+#!/usr/bin/env bash
+# claude-perm: Permission management CLI with PreToolUse hooks support
+# Usage: claude-perm hooks [install|status|test|uninstall]
+#        claude-perm baseline [--dry-run|-n]
+#        claude-perm audit [-g|--global] [-v|--verbose]
+#        claude-perm clean [-g|--global] [-n|--dry-run] [-v|--verbose]
+#        claude-perm sync [-n|--dry-run] [-p|--project PATH]
+#        claude-perm <other>  (delegates to claude-permissions.js)
+set -eo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+HOOKS_SRC="$REPO_DIR/hooks"
+HOOKS_DST="$HOME/.claude/hooks"
+SETTINGS="$HOME/.claude/settings.json"
+BASELINES_DIR="$HOME/.claude/perm-baselines"
+
+HOOK_FILES=(aws-permission-hook.sh gh-permission-hook.sh git-permission-hook.sh pkg-permission-hook.sh docker-permission-hook.sh terraform-permission-hook.sh shell-permission-hook.sh)
+CONF_FILES=(gh-allowed-owners.conf)
+
+# --- Colors ---
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# --- Helpers ---
+
+info()  { printf "${BLUE}info${NC}  %s\n" "$1"; }
+ok()    { printf "${GREEN}  ok${NC}  %s\n" "$1"; }
+warn()  { printf "${YELLOW}warn${NC}  %s\n" "$1"; }
+fail()  { printf "${RED}fail${NC}  %s\n" "$1"; }
+die()   { printf "${RED}error${NC} %s\n" "$1" >&2; exit 1; }
+
+ensure_jq() {
+  command -v jq &>/dev/null || die "jq is required but not installed"
+}
+
+ensure_settings() {
+  if [[ ! -f "$SETTINGS" ]]; then
+    mkdir -p "$(dirname "$SETTINGS")"
+    echo '{}' > "$SETTINGS"
+  fi
+}
+
+# Read the permissions object from a settings file, returning {} if absent
+read_permissions() {
+  local file="${1:-$SETTINGS}"
+  jq '.permissions // {}' "$file" 2>/dev/null || echo '{}'
+}
+
+# Read a specific permissions array (allow/deny/ask) from a settings file
+read_perm_array() {
+  local key="$1"
+  local file="${2:-$SETTINGS}"
+  jq -r --arg k "$key" '.permissions[$k] // [] | .[]' "$file" 2>/dev/null
+}
+
+# Detect repo owner from git remote -v in a given directory
+detect_repo_owner() {
+  local dir="${1:-.}"
+  local remote_url
+  remote_url=$(git -C "$dir" remote -v 2>/dev/null | head -1 | awk '{print $2}') || true
+  if [[ -z "$remote_url" ]]; then
+    echo ""
+    return
+  fi
+  # Handle SSH: git@github.com:OWNER/repo.git
+  if [[ "$remote_url" =~ github\.com[:/]([^/]+)/ ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return
+  fi
+  echo ""
+}
+
+# Collect project settings file paths for --global scanning
+collect_project_settings() {
+  local files=()
+  local search_dirs=("$HOME/dev" "$HOME/projects")
+  for base in "${search_dirs[@]}"; do
+    [[ -d "$base" ]] || continue
+    # Direct children: ~/dev/foo/.claude/settings.local.json
+    for d in "$base"/*/; do
+      [[ -d "$d" ]] || continue
+      local f="${d}.claude/settings.local.json"
+      [[ -f "$f" ]] && files+=("$f")
+    done
+    # Grandchildren: ~/projects/org/repo/.claude/settings.local.json
+    if [[ "$base" == "$HOME/projects" ]]; then
+      for d in "$base"/*/*/; do
+        [[ -d "$d" ]] || continue
+        local f="${d}.claude/settings.local.json"
+        [[ -f "$f" ]] && files+=("$f")
+      done
+    fi
+  done
+  printf '%s\n' "${files[@]}"
+}
+
+# --- baseline ---
+
+baseline_cmd() {
+  local dry_run=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run|-n) dry_run=true; shift ;;
+      *) die "Unknown baseline flag: $1" ;;
+    esac
+  done
+
+  ensure_jq
+  ensure_settings
+
+  if [[ ! -d "$BASELINES_DIR" ]]; then
+    die "Baselines directory not found: $BASELINES_DIR"
+  fi
+
+  local allow_entries=()
+  local deny_entries=()
+  local ask_entries=()
+
+  local repo_owner
+  repo_owner=$(detect_repo_owner)
+
+  info "Loading baselines from $BASELINES_DIR"
+  [[ -n "$repo_owner" ]] && info "Detected repo owner: $repo_owner"
+
+  local count=0
+  for bf in "$BASELINES_DIR"/*.json; do
+    [[ -f "$bf" ]] || continue
+    local bname
+    bname=$(basename "$bf" .json)
+    count=$((count + 1))
+
+    if [[ "$bname" == "gh" ]]; then
+      # Owner-scoped baseline
+      # allow_always goes to allow unconditionally
+      while IFS= read -r entry; do
+        [[ -n "$entry" ]] && allow_entries+=("$entry")
+      done < <(jq -r '.allow_always // [] | .[]' "$bf")
+
+      # ask_always goes to ask unconditionally
+      while IFS= read -r entry; do
+        [[ -n "$entry" ]] && ask_entries+=("$entry")
+      done < <(jq -r '.ask_always // [] | .[]' "$bf")
+
+      # allow_for_owners: check if current repo owner is in allow_owners
+      local owner_match=false
+      if [[ -n "$repo_owner" ]]; then
+        owner_match=$(jq -r --arg o "$repo_owner" \
+          '.allow_owners // [] | if any(. == $o) then "true" else "false" end' "$bf")
+      fi
+
+      if [[ "$owner_match" == "true" ]]; then
+        info "  gh: owner '$repo_owner' matched -- owner-scoped entries go to allow"
+        while IFS= read -r entry; do
+          [[ -n "$entry" ]] && allow_entries+=("$entry")
+        done < <(jq -r '.allow_for_owners // [] | .[]' "$bf")
+      else
+        info "  gh: owner '${repo_owner:-none}' not matched -- owner-scoped entries go to ask"
+        while IFS= read -r entry; do
+          [[ -n "$entry" ]] && ask_entries+=("$entry")
+        done < <(jq -r '.allow_for_owners // [] | .[]' "$bf")
+      fi
+    else
+      # Standard baseline: has allow, deny, ask arrays
+      while IFS= read -r entry; do
+        [[ -n "$entry" ]] && allow_entries+=("$entry")
+      done < <(jq -r '.allow // [] | .[]' "$bf")
+
+      while IFS= read -r entry; do
+        [[ -n "$entry" ]] && deny_entries+=("$entry")
+      done < <(jq -r '.deny // [] | .[]' "$bf")
+
+      while IFS= read -r entry; do
+        [[ -n "$entry" ]] && ask_entries+=("$entry")
+      done < <(jq -r '.ask // [] | .[]' "$bf")
+    fi
+
+    ok "Loaded $bname"
+  done
+
+  info "Loaded $count baseline(s): ${#allow_entries[@]} allow, ${#deny_entries[@]} deny, ${#ask_entries[@]} ask"
+
+  # Build JSON arrays from collected entries
+  local allow_json deny_json ask_json
+  allow_json=$(printf '%s\n' "${allow_entries[@]}" | jq -R . | jq -s 'unique')
+  deny_json=$(printf '%s\n' "${deny_entries[@]}" | jq -R . | jq -s 'unique')
+  ask_json=$(printf '%s\n' "${ask_entries[@]}" | jq -R . | jq -s 'unique')
+
+  # Merge with existing: additive (keep existing non-baseline entries)
+  local existing_allow existing_deny existing_ask
+  existing_allow=$(jq '.permissions.allow // []' "$SETTINGS")
+  existing_deny=$(jq '.permissions.deny // []' "$SETTINGS")
+  existing_ask=$(jq '.permissions.ask // []' "$SETTINGS")
+
+  local merged_allow merged_deny merged_ask
+  merged_allow=$(jq -n --argjson a "$existing_allow" --argjson b "$allow_json" '$a + $b | unique')
+  merged_deny=$(jq -n --argjson a "$existing_deny" --argjson b "$deny_json" '$a + $b | unique')
+  merged_ask=$(jq -n --argjson a "$existing_ask" --argjson b "$ask_json" '$a + $b | unique')
+
+  local added_allow added_deny added_ask
+  added_allow=$(jq -n --argjson merged "$merged_allow" --argjson existing "$existing_allow" '$merged | length - ($existing | length)')
+  added_deny=$(jq -n --argjson merged "$merged_deny" --argjson existing "$existing_deny" '$merged | length - ($existing | length)')
+  added_ask=$(jq -n --argjson merged "$merged_ask" --argjson existing "$existing_ask" '$merged | length - ($existing | length)')
+
+  if $dry_run; then
+    printf "\n${BOLD}Dry run — would add:${NC}\n"
+    printf "  allow: %s new entries (total %s)\n" "$added_allow" "$(echo "$merged_allow" | jq 'length')"
+    printf "  deny:  %s new entries (total %s)\n" "$added_deny" "$(echo "$merged_deny" | jq 'length')"
+    printf "  ask:   %s new entries (total %s)\n" "$added_ask" "$(echo "$merged_ask" | jq 'length')"
+
+    # Show new entries
+    local new_allow
+    new_allow=$(jq -n --argjson merged "$merged_allow" --argjson existing "$existing_allow" \
+      '$merged - $existing')
+    if [[ $(echo "$new_allow" | jq 'length') -gt 0 ]]; then
+      printf "\n${GREEN}New allow entries:${NC}\n"
+      echo "$new_allow" | jq -r '.[]' | while read -r e; do printf "  + %s\n" "$e"; done
+    fi
+
+    local new_deny
+    new_deny=$(jq -n --argjson merged "$merged_deny" --argjson existing "$existing_deny" \
+      '$merged - $existing')
+    if [[ $(echo "$new_deny" | jq 'length') -gt 0 ]]; then
+      printf "\n${RED}New deny entries:${NC}\n"
+      echo "$new_deny" | jq -r '.[]' | while read -r e; do printf "  + %s\n" "$e"; done
+    fi
+
+    local new_ask
+    new_ask=$(jq -n --argjson merged "$merged_ask" --argjson existing "$existing_ask" \
+      '$merged - $existing')
+    if [[ $(echo "$new_ask" | jq 'length') -gt 0 ]]; then
+      printf "\n${YELLOW}New ask entries:${NC}\n"
+      echo "$new_ask" | jq -r '.[]' | while read -r e; do printf "  + %s\n" "$e"; done
+    fi
+  else
+    local tmp
+    tmp=$(mktemp)
+    jq --argjson allow "$merged_allow" \
+       --argjson deny "$merged_deny" \
+       --argjson ask "$merged_ask" \
+       '.permissions.allow = $allow | .permissions.deny = $deny | .permissions.ask = $ask' \
+       "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+
+    printf "\n${GREEN}${BOLD}Baselines applied${NC}\n"
+    printf "  allow: +%s (total %s)\n" "$added_allow" "$(echo "$merged_allow" | jq 'length')"
+    printf "  deny:  +%s (total %s)\n" "$added_deny" "$(echo "$merged_deny" | jq 'length')"
+    printf "  ask:   +%s (total %s)\n" "$added_ask" "$(echo "$merged_ask" | jq 'length')"
+  fi
+}
+
+# --- audit ---
+
+# Run audit checks on a single settings file, returns findings as structured output
+_audit_file() {
+  local file="$1"
+  local verbose="${2:-false}"
+
+  local deprecated_syntax=()
+  local missing_core=()
+  local missing_mcp=()
+  local covered_entries=()
+  local env_sprawl=()
+  local multiline_artifacts=()
+  local exact_bloat=()
+  local literal_dupes=()
+
+  # Read all permission arrays
+  local -a allow_arr=() deny_arr=() ask_arr=() all_arr=()
+  while IFS= read -r e; do [[ -n "$e" ]] && allow_arr+=("$e"); done < <(jq -r '.permissions.allow // [] | .[]' "$file" 2>/dev/null)
+  while IFS= read -r e; do [[ -n "$e" ]] && deny_arr+=("$e"); done < <(jq -r '.permissions.deny // [] | .[]' "$file" 2>/dev/null)
+  while IFS= read -r e; do [[ -n "$e" ]] && ask_arr+=("$e"); done < <(jq -r '.permissions.ask // [] | .[]' "$file" 2>/dev/null)
+  all_arr=("${allow_arr[@]+"${allow_arr[@]}"}" "${deny_arr[@]+"${deny_arr[@]}"}" "${ask_arr[@]+"${ask_arr[@]}"}")
+
+  # Check 1: Deprecated syntax (:* instead of ' *')
+  for entry in "${all_arr[@]}"; do
+    if [[ "$entry" =~ :\*\)$ ]]; then
+      deprecated_syntax+=("$entry")
+    fi
+  done
+
+  # Check 2: Missing core native tools
+  local core_tools=("Read" "Write" "Edit" "Glob" "Grep" "MultiEdit")
+  for tool in "${core_tools[@]}"; do
+    local found=false
+    for entry in "${allow_arr[@]}"; do
+      if [[ "$entry" == "$tool" ]]; then
+        found=true
+        break
+      fi
+    done
+    if ! $found; then
+      missing_core+=("$tool")
+    fi
+  done
+
+  # Check 3: Missing MCP wildcards
+  local mcp_prefixes=("mcp__serena__" "mcp__context7__" "mcp__sequential-thinking__" "mcp__playwright__")
+  for prefix in "${mcp_prefixes[@]}"; do
+    local found=false
+    for entry in "${allow_arr[@]}"; do
+      if [[ "$entry" == "${prefix}*" ]]; then
+        found=true
+        break
+      fi
+    done
+    if ! $found; then
+      missing_mcp+=("${prefix}*")
+    fi
+  done
+
+  # Check 4: Covered entries (narrower pattern redundant with broader)
+  # Entry A covers entry B if B starts with A's prefix (everything before the *)
+  local -a wildcard_prefixes=()
+  for entry in "${all_arr[@]}"; do
+    if [[ "$entry" == *'*'* ]]; then
+      local prefix="${entry%%\**}"
+      wildcard_prefixes+=("$prefix")
+    fi
+  done
+
+  for entry in "${all_arr[@]}"; do
+    if [[ "$entry" == *'*'* ]]; then
+      local my_prefix="${entry%%\**}"
+      for wp in "${wildcard_prefixes[@]}"; do
+        # Skip self-comparison and empty prefixes
+        [[ "$wp" == "$my_prefix" ]] && continue
+        [[ -z "$wp" ]] && continue
+        # If my prefix starts with a broader wildcard prefix, I'm covered
+        if [[ "$my_prefix" == "$wp"* && ${#wp} -lt ${#my_prefix} ]]; then
+          covered_entries+=("$entry (covered by ${wp}*)")
+          break
+        fi
+      done
+    fi
+  done
+
+  # Check 5: Env sprawl (3+ entries sharing same env var prefix)
+  # Use temp file + awk instead of associative arrays (bash 3.2 compat)
+  local env_tmp
+  env_tmp=$(mktemp)
+  for entry in "${all_arr[@]}"; do
+    if [[ "$entry" =~ ^Bash\(([A-Z_]+=) ]]; then
+      local evar="${BASH_REMATCH[1]}"
+      local group_key
+      if [[ "$evar" =~ ^([A-Z]+_) ]]; then
+        group_key="${BASH_REMATCH[1]}"
+      else
+        group_key="${evar}"
+      fi
+      echo "$group_key" >> "$env_tmp"
+    fi
+  done
+  while IFS= read -r line; do
+    local ecount="${line%% *}"
+    local eprefix="${line#* }"
+    if (( ecount >= 3 )); then
+      env_sprawl+=("${eprefix}* ($ecount entries)")
+    fi
+  done < <(sort "$env_tmp" | uniq -c | awk '{print $1, $2}')
+  rm -f "$env_tmp"
+
+  # Check 6: Multiline artifacts (__NEW_LINE__)
+  for entry in "${all_arr[@]}"; do
+    if [[ "$entry" == *"__NEW_LINE__"* ]]; then
+      multiline_artifacts+=("$entry")
+    fi
+  done
+
+  # Check 7: Exact bloat (verbatim commands >100 chars without wildcard)
+  for entry in "${all_arr[@]}"; do
+    if [[ "$entry" != *'*'* && ${#entry} -gt 100 ]]; then
+      exact_bloat+=("$entry")
+    fi
+  done
+
+  # Check 8: Literal duplicates (bash 3.2 compat: use temp file + sort)
+  local dupes_tmp
+  dupes_tmp=$(mktemp)
+  printf '%s\n' "${all_arr[@]}" > "$dupes_tmp"
+  while IFS= read -r dupe; do
+    [[ -n "$dupe" ]] && literal_dupes+=("$dupe")
+  done < <(sort "$dupes_tmp" | uniq -d)
+  rm -f "$dupes_tmp"
+
+  # Check 9: Missing hooks
+  local hooks_missing=false
+  local hook_count
+  hook_count=$(jq '.hooks.PreToolUse // [] | length' "$file" 2>/dev/null || echo 0)
+  if (( hook_count == 0 )); then
+    hooks_missing=true
+  fi
+
+  # Output report
+  local total_issues=0
+  total_issues=$(( ${#deprecated_syntax[@]} + ${#missing_core[@]} + ${#missing_mcp[@]} + \
+    ${#covered_entries[@]} + ${#env_sprawl[@]} + ${#multiline_artifacts[@]} + \
+    ${#exact_bloat[@]} + ${#literal_dupes[@]} ))
+  $hooks_missing && total_issues=$((total_issues + 1))
+
+  printf "\n${BOLD}%-50s${NC}  ${DIM}(%s total entries)${NC}\n" "$file" "${#all_arr[@]}"
+  printf "  %-30s %s\n" "Category" "Count"
+  printf "  %-30s %s\n" "------------------------------" "-----"
+  printf "  %-30s %s\n" "Deprecated syntax (:*)" "${#deprecated_syntax[@]}"
+  printf "  %-30s %s\n" "Missing core tools" "${#missing_core[@]}"
+  printf "  %-30s %s\n" "Missing MCP wildcards" "${#missing_mcp[@]}"
+  printf "  %-30s %s\n" "Covered entries" "${#covered_entries[@]}"
+  printf "  %-30s %s\n" "Env var sprawl" "${#env_sprawl[@]}"
+  printf "  %-30s %s\n" "Multiline artifacts" "${#multiline_artifacts[@]}"
+  printf "  %-30s %s\n" "Exact bloat (>100 chars)" "${#exact_bloat[@]}"
+  printf "  %-30s %s\n" "Literal duplicates" "${#literal_dupes[@]}"
+  if $hooks_missing; then
+    printf "  %-30s %s\n" "Missing hooks" "1"
+  else
+    printf "  %-30s %s\n" "Missing hooks" "0"
+  fi
+
+  if [[ "$verbose" == "true" ]]; then
+    if (( ${#deprecated_syntax[@]} > 0 )); then
+      printf "\n  ${YELLOW}Deprecated syntax (:*):${NC}\n"
+      for e in "${deprecated_syntax[@]}"; do printf "    %s\n" "$e"; done
+    fi
+    if (( ${#missing_core[@]} > 0 )); then
+      printf "\n  ${RED}Missing core tools:${NC}\n"
+      for e in "${missing_core[@]}"; do printf "    %s\n" "$e"; done
+    fi
+    if (( ${#missing_mcp[@]} > 0 )); then
+      printf "\n  ${YELLOW}Missing MCP wildcards:${NC}\n"
+      for e in "${missing_mcp[@]}"; do printf "    %s\n" "$e"; done
+    fi
+    if (( ${#covered_entries[@]} > 0 )); then
+      printf "\n  ${CYAN}Covered entries:${NC}\n"
+      for e in "${covered_entries[@]}"; do printf "    %s\n" "$e"; done
+    fi
+    if (( ${#env_sprawl[@]} > 0 )); then
+      printf "\n  ${CYAN}Env var sprawl:${NC}\n"
+      for e in "${env_sprawl[@]}"; do printf "    %s\n" "$e"; done
+    fi
+    if (( ${#multiline_artifacts[@]} > 0 )); then
+      printf "\n  ${RED}Multiline artifacts:${NC}\n"
+      for e in "${multiline_artifacts[@]}"; do printf "    %.80s...\n" "$e"; done
+    fi
+    if (( ${#exact_bloat[@]} > 0 )); then
+      printf "\n  ${YELLOW}Exact bloat (>100 chars):${NC}\n"
+      for e in "${exact_bloat[@]}"; do printf "    %.80s...\n" "$e"; done
+    fi
+    if (( ${#literal_dupes[@]} > 0 )); then
+      printf "\n  ${YELLOW}Literal duplicates:${NC}\n"
+      for e in "${literal_dupes[@]}"; do printf "    %s\n" "$e"; done
+    fi
+    if $hooks_missing; then
+      printf "\n  ${RED}Missing hooks:${NC} No PreToolUse hooks configured\n"
+    fi
+  fi
+
+  if (( total_issues == 0 )); then
+    printf "\n  ${GREEN}No issues found${NC}\n"
+  else
+    printf "\n  ${YELLOW}%d issue(s) found${NC}\n" "$total_issues"
+  fi
+
+  return 0
+}
+
+audit_cmd() {
+  local global=false
+  local verbose=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -g|--global) global=true; shift ;;
+      -v|--verbose) verbose=true; shift ;;
+      *) die "Unknown audit flag: $1" ;;
+    esac
+  done
+
+  ensure_jq
+
+  printf "${BOLD}Permission Audit Report${NC}\n"
+
+  if $global; then
+    # Scan global settings
+    if [[ -f "$SETTINGS" ]]; then
+      _audit_file "$SETTINGS" "$verbose"
+    else
+      warn "Global settings not found: $SETTINGS"
+    fi
+
+    # Scan project settings
+    local project_files
+    project_files=$(collect_project_settings)
+    if [[ -n "$project_files" ]]; then
+      while IFS= read -r pf; do
+        [[ -f "$pf" ]] && _audit_file "$pf" "$verbose"
+      done <<< "$project_files"
+    else
+      info "No project settings files found"
+    fi
+  else
+    if [[ -f "$SETTINGS" ]]; then
+      _audit_file "$SETTINGS" "$verbose"
+    else
+      die "Settings not found: $SETTINGS"
+    fi
+  fi
+}
+
+# --- clean ---
+
+# Apply cleaning rules to a permissions object in a settings file
+# Outputs the cleaned JSON to stdout
+_clean_permissions() {
+  local file="$1"
+  local verbose="${2:-false}"
+  local dry_run="${3:-false}"
+
+  local changes=0
+
+  # Read current permissions into temp files for processing
+  local allow_file deny_file ask_file
+  allow_file=$(mktemp)
+  deny_file=$(mktemp)
+  ask_file=$(mktemp)
+  trap "rm -f '$allow_file' '$deny_file' '$ask_file'" RETURN
+
+  jq -r '.permissions.allow // [] | .[]' "$file" > "$allow_file" 2>/dev/null
+  jq -r '.permissions.deny // [] | .[]' "$file" > "$deny_file" 2>/dev/null
+  jq -r '.permissions.ask // [] | .[]' "$file" > "$ask_file" 2>/dev/null
+
+  # --- Rule 0: Migrate :* to ' *' ---
+  local r0_count=0
+  for pf in "$allow_file" "$deny_file" "$ask_file"; do
+    local tmp_r0
+    tmp_r0=$(mktemp)
+    while IFS= read -r entry; do
+      if [[ "$entry" =~ :\*\)$ ]]; then
+        local fixed="${entry//:*\)/ *\)}"
+        echo "$fixed" >> "$tmp_r0"
+        r0_count=$((r0_count + 1))
+        [[ "$verbose" == "true" ]] && printf "  ${CYAN}R0${NC} migrate: %s -> %s\n" "$entry" "$fixed"
+      else
+        echo "$entry" >> "$tmp_r0"
+      fi
+    done < "$pf"
+    mv "$tmp_r0" "$pf"
+  done
+  (( r0_count > 0 )) && changes=$((changes + r0_count))
+
+  # --- Rule 1: Remove covered entries ---
+  local r1_count=0
+  for pf in "$allow_file" "$deny_file" "$ask_file"; do
+    # Collect wildcard prefixes
+    local -a wprefixes=()
+    while IFS= read -r entry; do
+      if [[ "$entry" == *'*'* ]]; then
+        wprefixes+=("${entry%%\**}")
+      fi
+    done < "$pf"
+
+    local tmp_r1
+    tmp_r1=$(mktemp)
+    while IFS= read -r entry; do
+      local is_covered=false
+      if [[ "$entry" == *'*'* ]]; then
+        local my_prefix="${entry%%\**}"
+        for wp in "${wprefixes[@]}"; do
+          [[ "$wp" == "$my_prefix" ]] && continue
+          [[ -z "$wp" ]] && continue
+          if [[ "$my_prefix" == "$wp"* && ${#wp} -lt ${#my_prefix} ]]; then
+            is_covered=true
+            r1_count=$((r1_count + 1))
+            [[ "$verbose" == "true" ]] && printf "  ${CYAN}R1${NC} covered: %s (by ${wp}*)\n" "$entry"
+            break
+          fi
+        done
+      fi
+      $is_covered || echo "$entry" >> "$tmp_r1"
+    done < "$pf"
+    mv "$tmp_r1" "$pf"
+  done
+  (( r1_count > 0 )) && changes=$((changes + r1_count))
+
+  # --- Rule 2: Env-var prefix consolidation (bash 3.2 compat) ---
+  local r2_count=0
+  for pf in "$allow_file" "$deny_file" "$ask_file"; do
+    # Extract env var prefix groups and count them using temp files
+    local env_grp_tmp
+    env_grp_tmp=$(mktemp)
+    while IFS= read -r entry; do
+      if [[ "$entry" =~ ^Bash\(([A-Z_]+)= ]]; then
+        local full_var="${BASH_REMATCH[1]}"
+        local group_prefix
+        if [[ "$full_var" =~ ^([A-Z]+_) ]]; then
+          group_prefix="${BASH_REMATCH[1]}"
+        else
+          group_prefix="${full_var}_"
+        fi
+        echo "$group_prefix"
+      fi
+    done < "$pf" > "$env_grp_tmp"
+
+    # Find prefixes with 3+ entries
+    local consolidate_list_tmp
+    consolidate_list_tmp=$(mktemp)
+    sort "$env_grp_tmp" | uniq -c | while IFS= read -r line; do
+      local cnt="${line## }"
+      cnt="${cnt%% *}"
+      local gp="${line##* }"
+      if (( cnt >= 3 )); then
+        echo "$gp"
+        [[ "$verbose" == "true" ]] && printf "  ${CYAN}R2${NC} consolidate: %s* (%d entries -> 1)\n" \
+          "Bash(${gp}" "$cnt" >&2
+      fi
+    done > "$consolidate_list_tmp"
+    rm -f "$env_grp_tmp"
+
+    if [[ -s "$consolidate_list_tmp" ]]; then
+      local tmp_r2 added_tmp
+      tmp_r2=$(mktemp)
+      added_tmp=$(mktemp)
+      while IFS= read -r entry; do
+        local matched=false
+        if [[ "$entry" =~ ^Bash\(([A-Z_]+)= ]]; then
+          local full_var="${BASH_REMATCH[1]}"
+          local group_prefix
+          if [[ "$full_var" =~ ^([A-Z]+_) ]]; then
+            group_prefix="${BASH_REMATCH[1]}"
+          else
+            group_prefix="${full_var}_"
+          fi
+          if grep -qxF "$group_prefix" "$consolidate_list_tmp" 2>/dev/null; then
+            matched=true
+            r2_count=$((r2_count + 1))
+            # Add the consolidated wildcard once
+            if ! grep -qxF "$group_prefix" "$added_tmp" 2>/dev/null; then
+              echo "Bash(${group_prefix}*)" >> "$tmp_r2"
+              echo "$group_prefix" >> "$added_tmp"
+              r2_count=$((r2_count - 1))  # The replacement doesn't count as a removal
+            fi
+          fi
+        fi
+        $matched || echo "$entry" >> "$tmp_r2"
+      done < "$pf"
+      mv "$tmp_r2" "$pf"
+      rm -f "$added_tmp"
+    fi
+    rm -f "$consolidate_list_tmp"
+  done
+  (( r2_count > 0 )) && changes=$((changes + r2_count))
+
+  # --- Rule 3: Remove __NEW_LINE__ artifact entries ---
+  local r3_count=0
+  for pf in "$allow_file" "$deny_file" "$ask_file"; do
+    local tmp_r3
+    tmp_r3=$(mktemp)
+    while IFS= read -r entry; do
+      if [[ "$entry" == *"__NEW_LINE__"* ]]; then
+        r3_count=$((r3_count + 1))
+        [[ "$verbose" == "true" ]] && printf "  ${CYAN}R3${NC} multiline artifact: %.60s...\n" "$entry"
+      else
+        echo "$entry" >> "$tmp_r3"
+      fi
+    done < "$pf"
+    mv "$tmp_r3" "$pf"
+  done
+  (( r3_count > 0 )) && changes=$((changes + r3_count))
+
+  # --- Rule 4: Remove exact-match entries that duplicate a wildcard ---
+  local r4_count=0
+  for pf in "$allow_file" "$deny_file" "$ask_file"; do
+    # Collect wildcard prefixes from the current (post-R1/R2) state
+    local -a wprefixes4=()
+    while IFS= read -r entry; do
+      if [[ "$entry" == *'*'* ]]; then
+        wprefixes4+=("${entry%%\**}")
+      fi
+    done < "$pf"
+
+    local tmp_r4
+    tmp_r4=$(mktemp)
+    while IFS= read -r entry; do
+      local is_dup=false
+      if [[ "$entry" != *'*'* ]]; then
+        # This is a non-wildcard entry. Check if any wildcard covers it.
+        for wp in "${wprefixes4[@]}"; do
+          [[ -z "$wp" ]] && continue
+          if [[ "$entry" == "$wp"* ]]; then
+            is_dup=true
+            r4_count=$((r4_count + 1))
+            [[ "$verbose" == "true" ]] && printf "  ${CYAN}R4${NC} exact dup: %s (covered by ${wp}*)\n" "$entry"
+            break
+          fi
+        done
+      fi
+      $is_dup || echo "$entry" >> "$tmp_r4"
+    done < "$pf"
+    mv "$tmp_r4" "$pf"
+  done
+  (( r4_count > 0 )) && changes=$((changes + r4_count))
+
+  # --- Rule 5: Deduplicate literal duplicates ---
+  local r5_count=0
+  for pf in "$allow_file" "$deny_file" "$ask_file"; do
+    local before_count after_count
+    before_count=$(wc -l < "$pf" | tr -d ' ')
+    local tmp_r5
+    tmp_r5=$(mktemp)
+    awk '!seen[$0]++' "$pf" > "$tmp_r5"
+    after_count=$(wc -l < "$tmp_r5" | tr -d ' ')
+    local diff_count=$((before_count - after_count))
+    if (( diff_count > 0 )); then
+      r5_count=$((r5_count + diff_count))
+      [[ "$verbose" == "true" ]] && printf "  ${CYAN}R5${NC} deduplicated: %d literal duplicates\n" "$diff_count"
+    fi
+    mv "$tmp_r5" "$pf"
+  done
+  (( r5_count > 0 )) && changes=$((changes + r5_count))
+
+  # Build result JSON arrays
+  local result_allow result_deny result_ask
+  result_allow=$(jq -R . < "$allow_file" | jq -s '.')
+  result_deny=$(jq -R . < "$deny_file" | jq -s '.')
+  result_ask=$(jq -R . < "$ask_file" | jq -s '.')
+
+  # Remove any empty strings that sneak in from blank lines
+  result_allow=$(echo "$result_allow" | jq '[.[] | select(. != "")]')
+  result_deny=$(echo "$result_deny" | jq '[.[] | select(. != "")]')
+  result_ask=$(echo "$result_ask" | jq '[.[] | select(. != "")]')
+
+  # Report
+  printf "\n  ${BOLD}Cleaning rules applied:${NC}\n"
+  printf "    R0 deprecated syntax:  %d\n" "$r0_count"
+  printf "    R1 covered entries:    %d\n" "$r1_count"
+  printf "    R2 env consolidation:  %d\n" "$r2_count"
+  printf "    R3 multiline artifacts:%d\n" "$r3_count"
+  printf "    R4 exact duplicates:   %d\n" "$r4_count"
+  printf "    R5 literal duplicates: %d\n" "$r5_count"
+  printf "    ${BOLD}Total changes:         %d${NC}\n" "$changes"
+
+  if (( changes == 0 )); then
+    printf "\n  ${GREEN}Already clean${NC}\n"
+  elif [[ "$dry_run" == "true" ]]; then
+    printf "\n  ${YELLOW}Dry run — no changes written${NC}\n"
+  else
+    # Write back
+    local tmp
+    tmp=$(mktemp)
+    jq --argjson allow "$result_allow" \
+       --argjson deny "$result_deny" \
+       --argjson ask "$result_ask" \
+       '.permissions.allow = $allow | .permissions.deny = $deny | .permissions.ask = $ask' \
+       "$file" > "$tmp" && mv "$tmp" "$file"
+    printf "\n  ${GREEN}Cleaned and written${NC}\n"
+  fi
+}
+
+clean_cmd() {
+  local global=false
+  local dry_run=false
+  local verbose=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -g|--global) global=true; shift ;;
+      -n|--dry-run) dry_run=true; shift ;;
+      -v|--verbose) verbose=true; shift ;;
+      *) die "Unknown clean flag: $1" ;;
+    esac
+  done
+
+  ensure_jq
+
+  printf "${BOLD}Permission Cleaner${NC}\n"
+
+  if $global; then
+    if [[ -f "$SETTINGS" ]]; then
+      printf "\n${BOLD}Global: %s${NC}\n" "$SETTINGS"
+      _clean_permissions "$SETTINGS" "$verbose" "$dry_run"
+    fi
+
+    local project_files
+    project_files=$(collect_project_settings)
+    if [[ -n "$project_files" ]]; then
+      while IFS= read -r pf; do
+        if [[ -f "$pf" ]]; then
+          printf "\n${BOLD}Project: %s${NC}\n" "$pf"
+          _clean_permissions "$pf" "$verbose" "$dry_run"
+        fi
+      done <<< "$project_files"
+    fi
+  else
+    if [[ -f "$SETTINGS" ]]; then
+      _clean_permissions "$SETTINGS" "$verbose" "$dry_run"
+    else
+      die "Settings not found: $SETTINGS"
+    fi
+  fi
+}
+
+# --- sync ---
+
+sync_cmd() {
+  local dry_run=false
+  local project_path=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -n|--dry-run) dry_run=true; shift ;;
+      -p|--project) project_path="$2"; shift 2 ;;
+      *) die "Unknown sync flag: $1" ;;
+    esac
+  done
+
+  ensure_jq
+  ensure_settings
+
+  if [[ ! -d "$BASELINES_DIR" ]]; then
+    die "Baselines directory not found: $BASELINES_DIR"
+  fi
+
+  printf "${BOLD}Permission Sync${NC}\n"
+
+  # --- Step 1: Load all baselines ---
+  info "Step 1/9: Loading baselines"
+  local bl_allow_file bl_deny_file bl_ask_file
+  bl_allow_file=$(mktemp)
+  bl_deny_file=$(mktemp)
+  bl_ask_file=$(mktemp)
+  : > "$bl_allow_file"
+  : > "$bl_deny_file"
+  : > "$bl_ask_file"
+
+  local count=0
+  for bf in "$BASELINES_DIR"/*.json; do
+    [[ -f "$bf" ]] || continue
+    local bname
+    bname=$(basename "$bf" .json)
+    count=$((count + 1))
+
+    if [[ "$bname" != "gh" ]]; then
+      jq -r '.allow // [] | .[]' "$bf" >> "$bl_allow_file" 2>/dev/null
+      jq -r '.deny // [] | .[]' "$bf" >> "$bl_deny_file" 2>/dev/null
+      jq -r '.ask // [] | .[]' "$bf" >> "$bl_ask_file" 2>/dev/null
+    fi
+
+    ok "Loaded $bname"
+  done
+  info "Loaded $count baseline(s)"
+
+  # --- Step 2: Detect repo owner ---
+  info "Step 2/9: Detecting repo owner"
+  local owner_match=false
+  local repo_owner
+  repo_owner=$(detect_repo_owner)
+  if [[ -n "$repo_owner" ]]; then
+    ok "Repo owner: $repo_owner"
+  else
+    warn "Could not detect repo owner"
+  fi
+
+  # --- Step 3: Apply owner-scoped rules (gh.json) ---
+  info "Step 3/9: Applying owner-scoped rules"
+  local gh_file="$BASELINES_DIR/gh.json"
+  if [[ -f "$gh_file" ]]; then
+    # allow_always goes to allow unconditionally
+    jq -r '.allow_always // [] | .[]' "$gh_file" >> "$bl_allow_file"
+
+    # ask_always goes to ask unconditionally
+    jq -r '.ask_always // [] | .[]' "$gh_file" >> "$bl_ask_file"
+
+    # Owner-scoped entries
+    if [[ -n "$repo_owner" ]]; then
+      owner_match=$(jq -r --arg o "$repo_owner" \
+        '.allow_owners // [] | if any(. == $o) then "true" else "false" end' "$gh_file")
+    fi
+
+    if [[ "$owner_match" == "true" ]]; then
+      ok "Owner '$repo_owner' matched -- scoped entries go to allow"
+      jq -r '.allow_for_owners // [] | .[]' "$gh_file" >> "$bl_allow_file"
+    else
+      warn "Owner '${repo_owner:-none}' not matched -- scoped entries go to ask"
+      jq -r '.allow_for_owners // [] | .[]' "$gh_file" >> "$bl_ask_file"
+    fi
+  fi
+
+  # --- Step 4: Create gh labels on owner-matched repos ---
+  info "Step 4/9: Creating gh labels"
+  if [[ "$owner_match" == "true" ]] && command -v gh &>/dev/null; then
+    local _label_name _label_color _label_desc
+    local _label_defs="claude:finding|7B61FF|Analysis results and research
+claude:plan|0E8A16|Implementation plans
+claude:log|BFDADC|Session logs and progress
+claude:question|D876E3|Needs response
+claude:design|1D76DB|Tech design documents"
+    while IFS='|' read -r _label_name _label_color _label_desc; do
+      [[ -z "$_label_name" ]] && continue
+      if $dry_run; then
+        info "  Would create label: $_label_name (#$_label_color)"
+      else
+        if gh label create "$_label_name" --color "$_label_color" \
+             --description "$_label_desc" --force 2>/dev/null; then
+          ok "Label: $_label_name"
+        else
+          warn "Failed to create label: $_label_name"
+        fi
+      fi
+    done <<< "$_label_defs"
+  else
+    info "  Skipped (owner not matched or gh not available)"
+  fi
+
+  # --- Step 5: Load extension baselines ---
+  info "Step 5/9: Loading extension baselines"
+  if [[ -n "$repo_owner" ]]; then
+    local ext_file="$BASELINES_DIR/gh-${repo_owner}.json"
+    if [[ -f "$ext_file" ]]; then
+      ok "Found extension baseline: gh-${repo_owner}.json"
+      jq -r '.allow_for_owners // [] | .[]' "$ext_file" >> "$bl_allow_file" 2>/dev/null
+      jq -r '.ask_always // [] | .[]' "$ext_file" >> "$bl_ask_file" 2>/dev/null
+    else
+      info "  No extension baseline for owner '$repo_owner'"
+    fi
+  fi
+
+  # --- Step 6: Load existing settings permissions ---
+  info "Step 6/9: Loading existing permissions"
+  local ex_allow_file ex_deny_file ex_ask_file
+  ex_allow_file=$(mktemp)
+  ex_deny_file=$(mktemp)
+  ex_ask_file=$(mktemp)
+
+  jq -r '.permissions.allow // [] | .[]' "$SETTINGS" > "$ex_allow_file" 2>/dev/null
+  jq -r '.permissions.deny // [] | .[]' "$SETTINGS" > "$ex_deny_file" 2>/dev/null
+  jq -r '.permissions.ask // [] | .[]' "$SETTINGS" > "$ex_ask_file" 2>/dev/null
+
+  local ex_allow_count ex_deny_count ex_ask_count
+  ex_allow_count=$(wc -l < "$ex_allow_file" | tr -d ' ')
+  ex_deny_count=$(wc -l < "$ex_deny_file" | tr -d ' ')
+  ex_ask_count=$(wc -l < "$ex_ask_file" | tr -d ' ')
+  ok "Existing: $ex_allow_count allow, $ex_deny_count deny, $ex_ask_count ask"
+
+  # --- Step 7: Apply clean rules to existing entries ---
+  info "Step 7/9: Cleaning existing entries"
+  # Write a temp settings file with just existing permissions for cleaning
+  local clean_tmp
+  clean_tmp=$(mktemp)
+  local ex_allow_json ex_deny_json ex_ask_json
+  ex_allow_json=$(jq -R . < "$ex_allow_file" | jq -s '[.[] | select(. != "")]')
+  ex_deny_json=$(jq -R . < "$ex_deny_file" | jq -s '[.[] | select(. != "")]')
+  ex_ask_json=$(jq -R . < "$ex_ask_file" | jq -s '[.[] | select(. != "")]')
+  jq -n --argjson allow "$ex_allow_json" --argjson deny "$ex_deny_json" --argjson ask "$ex_ask_json" \
+    '{"permissions": {"allow": $allow, "deny": $deny, "ask": $ask}}' > "$clean_tmp"
+
+  # Run cleaning (always apply, not dry-run -- we write final result at end)
+  _clean_permissions "$clean_tmp" "false" "false"
+
+  # Read cleaned entries back
+  jq -r '.permissions.allow // [] | .[]' "$clean_tmp" > "$ex_allow_file" 2>/dev/null
+  jq -r '.permissions.deny // [] | .[]' "$clean_tmp" > "$ex_deny_file" 2>/dev/null
+  jq -r '.permissions.ask // [] | .[]' "$clean_tmp" > "$ex_ask_file" 2>/dev/null
+  rm -f "$clean_tmp"
+
+  # --- Step 8: Merge baselines + cleaned existing ---
+  info "Step 8/9: Merging entries"
+  local merged_allow_file merged_deny_file merged_ask_file
+  merged_allow_file=$(mktemp)
+  merged_deny_file=$(mktemp)
+  merged_ask_file=$(mktemp)
+
+  { cat "$bl_allow_file"; cat "$ex_allow_file"; } | sort -u > "$merged_allow_file"
+  { cat "$bl_deny_file"; cat "$ex_deny_file"; } | sort -u > "$merged_deny_file"
+  { cat "$bl_ask_file"; cat "$ex_ask_file"; } | sort -u > "$merged_ask_file"
+
+  # --- Step 9: Resolve conflicts (deny > ask > allow) ---
+  info "Step 9/9: Resolving conflicts"
+  local conflict_count=0
+
+  # If an entry is in deny, remove from ask and allow
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    local escaped
+    escaped=$(printf '%s\n' "$entry" | sed 's/[[\.*^$()+?{}|]/\\&/g')
+    if grep -qxF "$entry" "$merged_ask_file" 2>/dev/null; then
+      grep -vxF "$entry" "$merged_ask_file" > "$merged_ask_file.tmp" && mv "$merged_ask_file.tmp" "$merged_ask_file"
+      conflict_count=$((conflict_count + 1))
+    fi
+    if grep -qxF "$entry" "$merged_allow_file" 2>/dev/null; then
+      grep -vxF "$entry" "$merged_allow_file" > "$merged_allow_file.tmp" && mv "$merged_allow_file.tmp" "$merged_allow_file"
+      conflict_count=$((conflict_count + 1))
+    fi
+  done < "$merged_deny_file"
+
+  # If an entry is in ask, remove from allow
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    if grep -qxF "$entry" "$merged_allow_file" 2>/dev/null; then
+      grep -vxF "$entry" "$merged_allow_file" > "$merged_allow_file.tmp" && mv "$merged_allow_file.tmp" "$merged_allow_file"
+      conflict_count=$((conflict_count + 1))
+    fi
+  done < "$merged_ask_file"
+
+  (( conflict_count > 0 )) && ok "Resolved $conflict_count conflict(s) (deny > ask > allow)"
+
+  # Build final JSON
+  local final_allow final_deny final_ask
+  final_allow=$(jq -R . < "$merged_allow_file" | jq -s '[.[] | select(. != "")]')
+  final_deny=$(jq -R . < "$merged_deny_file" | jq -s '[.[] | select(. != "")]')
+  final_ask=$(jq -R . < "$merged_ask_file" | jq -s '[.[] | select(. != "")]')
+
+  local final_allow_count final_deny_count final_ask_count
+  final_allow_count=$(echo "$final_allow" | jq 'length')
+  final_deny_count=$(echo "$final_deny" | jq 'length')
+  final_ask_count=$(echo "$final_ask" | jq 'length')
+
+  # Clean up temp files
+  rm -f "$bl_allow_file" "$bl_deny_file" "$bl_ask_file" \
+        "$ex_allow_file" "$ex_deny_file" "$ex_ask_file" \
+        "$merged_allow_file" "$merged_deny_file" "$merged_ask_file"
+
+  printf "\n${BOLD}Final totals:${NC}\n"
+  printf "  allow: %s\n" "$final_allow_count"
+  printf "  deny:  %s\n" "$final_deny_count"
+  printf "  ask:   %s\n" "$final_ask_count"
+
+  if $dry_run; then
+    printf "\n${YELLOW}Dry run — no changes written${NC}\n"
+  else
+    # Write to global settings.json
+    local tmp
+    tmp=$(mktemp)
+    jq --argjson allow "$final_allow" \
+       --argjson deny "$final_deny" \
+       --argjson ask "$final_ask" \
+       '.permissions.allow = $allow | .permissions.deny = $deny | .permissions.ask = $ask' \
+       "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+    ok "Wrote $SETTINGS"
+
+    # Optionally write project settings
+    if [[ -n "$project_path" ]]; then
+      local project_settings="${project_path}/.claude/settings.local.json"
+      if [[ -f "$project_settings" ]]; then
+        local ptmp
+        ptmp=$(mktemp)
+        jq --argjson allow "$final_allow" \
+           --argjson deny "$final_deny" \
+           --argjson ask "$final_ask" \
+           '.permissions.allow = $allow | .permissions.deny = $deny | .permissions.ask = $ask' \
+           "$project_settings" > "$ptmp" && mv "$ptmp" "$project_settings"
+        ok "Wrote $project_settings"
+      else
+        mkdir -p "${project_path}/.claude"
+        jq -n --argjson allow "$final_allow" \
+              --argjson deny "$final_deny" \
+              --argjson ask "$final_ask" \
+              '{"permissions": {"allow": $allow, "deny": $deny, "ask": $ask}}' \
+              > "$project_settings"
+        ok "Created $project_settings"
+      fi
+    fi
+
+    # --- CLAUDE.md workflow injection ---
+    if [[ "$owner_match" == "true" ]]; then
+      local _inject_path=""
+      if [[ -n "$project_path" && -f "${project_path}/CLAUDE.md" ]]; then
+        _inject_path="${project_path}/CLAUDE.md"
+      elif [[ -f "CLAUDE.md" ]]; then
+        _inject_path="CLAUDE.md"
+      fi
+
+      if [[ -n "$_inject_path" ]]; then
+        local _sentinel="<!-- claude-perm:workflow-injected -->"
+        if ! grep -qF "$_sentinel" "$_inject_path" 2>/dev/null; then
+          local _repo_name
+          _repo_name=$(basename "${project_path:-$(pwd)}")
+          info "Injecting workflow instructions into $_inject_path"
+          cat >> "$_inject_path" <<WORKFLOW_EOF
+
+$_sentinel
+## Cross-Repo Workflow
+
+When you discover findings, bugs, or questions relevant to another repo, file them as GitHub issues:
+
+\`\`\`bash
+# File a finding in another repo
+gh issue create --repo rock-valley/<target-repo> \\
+  --title "<title>" \\
+  --label "claude:finding" --label "author:${_repo_name}" \\
+  --body "<details>"
+
+# Check open Claude issues in this repo
+gh issue list --label "claude:" --state open
+\`\`\`
+
+Available labels: \`claude:finding\`, \`claude:plan\`, \`claude:question\`, \`claude:log\`, \`claude:design\`
+
+> Full workflow reference: \$RVT_DOCS/workflows/cross-repo-comms.md
+WORKFLOW_EOF
+          ok "Injected workflow instructions"
+        else
+          info "  CLAUDE.md already has workflow instructions"
+        fi
+      fi
+    fi
+
+    printf "\n${GREEN}${BOLD}Sync complete${NC}\n"
+  fi
+}
+
+# --- hooks install ---
+
+hooks_install() {
+  ensure_jq
+  ensure_settings
+
+  info "Installing PreToolUse hooks..."
+
+  # Create destination
+  mkdir -p "$HOOKS_DST"
+
+  # Copy hook scripts
+  for f in "${HOOK_FILES[@]}"; do
+    if [[ ! -f "$HOOKS_SRC/$f" ]]; then
+      fail "Source hook not found: $HOOKS_SRC/$f"
+      return 1
+    fi
+    cp "$HOOKS_SRC/$f" "$HOOKS_DST/$f"
+    chmod +x "$HOOKS_DST/$f"
+    ok "Installed $f"
+  done
+
+  # Copy config files
+  for f in "${CONF_FILES[@]}"; do
+    if [[ -f "$HOOKS_SRC/$f" ]]; then
+      cp "$HOOKS_SRC/$f" "$HOOKS_DST/$f"
+      ok "Installed $f"
+    fi
+  done
+
+  # Patch settings.json
+  local hooks_config
+  hooks_config=$(cat <<'HOOKJSON'
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/aws-permission-hook.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/gh-permission-hook.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/git-permission-hook.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/pkg-permission-hook.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/docker-permission-hook.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/terraform-permission-hook.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/shell-permission-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+HOOKJSON
+)
+
+  local tmp
+  tmp=$(mktemp)
+  jq --argjson hooks "$(printf '%s' "$hooks_config" | jq '.hooks')" \
+    '.hooks = $hooks' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+  ok "Updated settings.json with hook configuration"
+
+  printf "\n${GREEN}${BOLD}Hooks installed successfully${NC}\n"
+  printf "Run ${CYAN}claude-perm hooks status${NC} to verify\n"
+}
+
+# --- hooks uninstall ---
+
+hooks_uninstall() {
+  ensure_jq
+  info "Uninstalling PreToolUse hooks..."
+
+  # Remove hook files
+  for f in "${HOOK_FILES[@]}" "${CONF_FILES[@]}"; do
+    if [[ -f "$HOOKS_DST/$f" ]]; then
+      rm "$HOOKS_DST/$f"
+      ok "Removed $f"
+    fi
+  done
+
+  # Clean up empty hooks dir
+  if [[ -d "$HOOKS_DST" ]] && [[ -z "$(ls -A "$HOOKS_DST" 2>/dev/null)" ]]; then
+    rmdir "$HOOKS_DST"
+    ok "Removed empty hooks directory"
+  fi
+
+  # Remove hooks key from settings.json
+  if [[ -f "$SETTINGS" ]]; then
+    local tmp
+    tmp=$(mktemp)
+    jq 'del(.hooks)' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+    ok "Removed hooks from settings.json"
+  fi
+
+  printf "\n${GREEN}${BOLD}Hooks uninstalled${NC}\n"
+}
+
+# --- hooks status ---
+
+hooks_status() {
+  ensure_jq
+  printf "${BOLD}PreToolUse Hook Status${NC}\n\n"
+
+  local all_ok=true
+
+  # Check hook files
+  printf "${BOLD}Hook files:${NC}\n"
+  for f in "${HOOK_FILES[@]}"; do
+    if [[ -f "$HOOKS_DST/$f" ]]; then
+      if [[ -x "$HOOKS_DST/$f" ]]; then
+        ok "$f (installed, executable)"
+      else
+        warn "$f (installed, NOT executable)"
+        all_ok=false
+      fi
+    else
+      fail "$f (not installed)"
+      all_ok=false
+    fi
+  done
+
+  # Check config files
+  printf "\n${BOLD}Config files:${NC}\n"
+  for f in "${CONF_FILES[@]}"; do
+    if [[ -f "$HOOKS_DST/$f" ]]; then
+      local count
+      count=$(wc -l < "$HOOKS_DST/$f" | tr -d ' ')
+      ok "$f ($count entries)"
+    else
+      warn "$f (not found, will deny unknown owners)"
+    fi
+  done
+
+  # Check settings.json
+  printf "\n${BOLD}Settings:${NC}\n"
+  if [[ -f "$SETTINGS" ]]; then
+    local hook_count
+    hook_count=$(jq '.hooks.PreToolUse // [] | length' "$SETTINGS" 2>/dev/null || echo 0)
+    if (( hook_count > 0 )); then
+      ok "settings.json has $hook_count PreToolUse matcher(s)"
+      # Show configured hooks
+      jq -r '.hooks.PreToolUse[]? | "     \(.matcher): \(.hooks | length) hook(s)"' "$SETTINGS" 2>/dev/null
+    else
+      fail "No PreToolUse hooks in settings.json"
+      all_ok=false
+    fi
+  else
+    fail "settings.json not found"
+    all_ok=false
+  fi
+
+  printf "\n"
+  if $all_ok; then
+    printf "${GREEN}${BOLD}All checks passed${NC}\n"
+  else
+    printf "${YELLOW}${BOLD}Some issues found${NC} — run ${CYAN}claude-perm hooks install${NC} to fix\n"
+  fi
+}
+
+# --- hooks test ---
+
+hooks_test() {
+  local cmd="${1:-}"
+  [[ -z "$cmd" ]] && die "Usage: claude-perm hooks test <command>"
+
+  ensure_jq
+
+  local stdin_json
+  stdin_json=$(jq -n --arg cmd "$cmd" '{"tool_name":"Bash","tool_input":{"command":$cmd}}')
+
+  printf "${BOLD}Testing:${NC} %s\n\n" "$cmd"
+
+  local any_match=false
+
+  for f in "${HOOK_FILES[@]}"; do
+    local hook_path="$HOOKS_DST/$f"
+    [[ -f "$hook_path" ]] || hook_path="$HOOKS_SRC/$f"
+    [[ -f "$hook_path" ]] || continue
+
+    local output
+    output=$(printf '%s' "$stdin_json" | bash "$hook_path" 2>/dev/null) || true
+
+    if [[ -z "$output" ]]; then
+      printf "  ${CYAN}%-30s${NC} → no opinion\n" "$f"
+      continue
+    fi
+
+    any_match=true
+    local decision reason
+    decision=$(printf '%s' "$output" | jq -r '.permissionDecision // "unknown"')
+    reason=$(printf '%s' "$output" | jq -r '.reason // ""')
+
+    local color
+    case "$decision" in
+      allow) color="$GREEN" ;;
+      deny)  color="$RED" ;;
+      ask)   color="$YELLOW" ;;
+      *)     color="$NC" ;;
+    esac
+
+    printf "  ${CYAN}%-30s${NC} → ${color}${BOLD}%s${NC}" "$f" "$(echo "$decision" | tr '[:lower:]' '[:upper:]')"
+    [[ -n "$reason" ]] && printf " (%s)" "$reason"
+    printf "\n"
+  done
+
+  if ! $any_match; then
+    printf "\n  ${CYAN}No hooks matched${NC} — command passes through to default permissions\n"
+  fi
+}
+
+# --- hooks subcommand dispatch ---
+
+hooks_dispatch() {
+  local subcmd="${1:-}"
+  shift 2>/dev/null || true
+
+  case "$subcmd" in
+    install)    hooks_install ;;
+    uninstall)  hooks_uninstall ;;
+    status)     hooks_status ;;
+    test)       hooks_test "$@" ;;
+    "")
+      printf "Usage: claude-perm hooks <command>\n\n"
+      printf "Commands:\n"
+      printf "  install     Install PreToolUse hooks\n"
+      printf "  uninstall   Remove hooks and settings\n"
+      printf "  status      Show hook health\n"
+      printf "  test <cmd>  Simulate hook decision for a command\n"
+      ;;
+    *)
+      die "Unknown hooks command: $subcmd"
+      ;;
+  esac
+}
+
+# --- Main dispatch ---
+
+main() {
+  local subcmd="${1:-}"
+  shift 2>/dev/null || true
+
+  case "$subcmd" in
+    hooks)
+      hooks_dispatch "$@"
+      ;;
+    baseline)
+      baseline_cmd "$@"
+      ;;
+    audit)
+      audit_cmd "$@"
+      ;;
+    clean)
+      clean_cmd "$@"
+      ;;
+    sync)
+      sync_cmd "$@"
+      ;;
+    help|--help|-h)
+      printf "Usage: claude-perm <command> [args]\n\n"
+      printf "Commands:\n"
+      printf "  hooks [cmd]               Manage PreToolUse permission hooks\n"
+      printf "  baseline [--dry-run|-n]    Apply permission presets from baselines\n"
+      printf "  audit [-g] [-v]           Permission health report\n"
+      printf "  clean [-g] [-n] [-v]      Consolidate and deduplicate permissions\n"
+      printf "  sync [-n] [-p PATH]       Full rebuild: baselines + clean + merge\n"
+      printf "  show                      Show current permissions\n"
+      printf "  merge                     Merge global + local permissions\n"
+      printf "  diff                      Show permission differences\n"
+      printf "\nFlags:\n"
+      printf "  -g, --global    Scan all project settings (audit, clean)\n"
+      printf "  -n, --dry-run   Preview changes without writing\n"
+      printf "  -v, --verbose   Show individual entries per category\n"
+      printf "  -p, --project   Also update project settings.local.json (sync)\n"
+      printf "\nRun ${CYAN}claude-perm hooks${NC} for hook-specific commands\n"
+      printf "Run ${CYAN}claude-perm <command> --help${NC} for command-specific help\n"
+      ;;
+    "")
+      # No args: show help
+      main help
+      ;;
+    *)
+      # Backward compat: delegate to claude-permissions.js
+      if [[ -f "$SCRIPT_DIR/claude-permissions.js" ]]; then
+        exec "$SCRIPT_DIR/claude-permissions.js" "$subcmd" "$@"
+      else
+        die "Unknown command: $subcmd (claude-permissions.js not found for fallback)"
+      fi
+      ;;
+  esac
+}
+
+main "$@"

@@ -67,6 +67,6 @@ alias dkspf='docker system prune -f'
 
 alias tfw='terraform workspace'
 alias tfa='terraform apply'
-alias claude="~/.claude/local/claude"
+alias claude="~/.local/bin/claude"
 alias pip="pip3"
 # Claude shell management moved to ~/.zsh/claude.zsh
