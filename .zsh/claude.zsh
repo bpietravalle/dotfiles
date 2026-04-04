@@ -24,10 +24,6 @@ claude-util() {
       _claude_watch "$@"
       ;;
 
-    # Permissions management
-    perm|permissions)
-      claude-perm "$@"
-      ;;
 
     # TTY recovery (run from another session)
     unfreeze)
@@ -364,7 +360,6 @@ PROCESS MANAGEMENT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OTHER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  perm [cmd]          Permission management (hooks|show|merge|diff)
   unfreeze [pane]     Fix frozen pane TTY (run from other session)
   help                Show this help
 

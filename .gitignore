@@ -15,3 +15,4 @@
 bin/cc-integrate
 bin/cc-launch
 bin/cc-project
+.tmuxinator/rvt-ops.yaml

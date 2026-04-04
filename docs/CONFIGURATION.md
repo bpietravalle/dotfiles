@@ -253,7 +253,7 @@ The setup script creates symlinks for:
 
 - `.bash_profile`, `.bashrc`, `.profile`
 - `.git_template`, `.gitconfig`
-- `.tmux.conf`, `.tmuxinator`
+- `.tmux.conf`
 - `.vimrc`, `.zsh`, `.zshrc`
 - `bin`
 - `.terraformrc`
