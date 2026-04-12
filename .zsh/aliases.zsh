@@ -23,16 +23,6 @@ alias gc='git commit'
 alias gd='git diff'
 alias gk='gitk --all&'
 alias gx='gitx --all'
-
-alias bb='$BITBRAID_PATH'
-alias bbf='$BITBRAID_PATH/frontend'
-alias bblibs='$BITBRAID_PATH/frontend/libs'
-alias bbtypes='$BITBRAID_PATH/frontend/libs/shared/types/src/lib'
-alias bbshareser='$BITBRAID_PATH/frontend/libs/shared/services/src/lib'
-alias bbapp='$BITBRAID_PATH/frontend/apps/web/src/app'
-alias bbfeat='$BITBRAID_PATH/frontend/libs/web/features/src/lib'
-alias bbpage='$BITBRAID_PATH/frontend/libs/web/pages'
-alias wordpath='$HOME/projects/working-with-word'
 alias bfg='java -jar $HOME/bfg-1.14.0.jar'
 
 alias ms='tmuxinator start'
@@ -69,4 +59,6 @@ alias tfw='terraform workspace'
 alias tfa='terraform apply'
 alias claude="~/.local/bin/claude"
 alias pip="pip3"
+alias snowsql="/Applications/SnowSQL.app/Contents/MacOS/snowsql"
+
 # Claude shell management moved to ~/.zsh/claude.zsh
