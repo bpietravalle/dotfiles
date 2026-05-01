@@ -105,15 +105,34 @@ watcher_loop() {
                 local pid="${vitest_pids[$i]}"
                 local mem_mb=$((${vitest_mems[$i]} / 1024))
                 local short_cmd="${vitest_cmds[$i]:0:50}"
-                
-                if kill "$pid" 2>/dev/null; then
-                    log "Killed PID $pid (${mem_mb}MB) - $short_cmd"
-                else
-                    log "Failed to kill PID $pid"
+
+                # Skip zombies (defunct) — parent must reap, signals are no-ops
+                local pstat=$(ps -p "$pid" -o stat= 2>/dev/null | tr -d ' ')
+                if [[ "$pstat" == Z* ]]; then
+                    log "Skipped PID $pid (zombie/defunct) - $short_cmd"
+                    continue
                 fi
-                
-                # Recalculate remaining memory
-                total_mem_mb=$((total_mem_mb - mem_mb))
+
+                # Probe existence/permission before signaling; distinguishes ESRCH from EPERM
+                local probe_err=$(kill -0 "$pid" 2>&1)
+                if [[ -n "$probe_err" ]]; then
+                    log "Skipped PID $pid ($probe_err) - $short_cmd"
+                    continue
+                fi
+
+                # SIGTERM, escalate to SIGKILL on failure, capture real error
+                local kill_err
+                if kill_err=$(kill "$pid" 2>&1); then
+                    log "Killed PID $pid (${mem_mb}MB) - $short_cmd"
+                    total_mem_mb=$((total_mem_mb - mem_mb))
+                elif kill_err=$(kill -KILL "$pid" 2>&1); then
+                    log "Killed PID $pid via SIGKILL (${mem_mb}MB) - $short_cmd"
+                    total_mem_mb=$((total_mem_mb - mem_mb))
+                else
+                    log "Failed to kill PID $pid: ${kill_err:-unknown error}"
+                    continue
+                fi
+
                 if [[ $total_mem_mb -lt $threshold_mb ]]; then
                     log "Memory now below threshold (${total_mem_mb}MB)"
                     break

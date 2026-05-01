@@ -54,3 +54,38 @@ get_github_url() {
   echo "$github_url" | pbcopy
   echo "$github_url"
 }
+
+# Delete local branches whose upstream tracking branch no longer exists on remote.
+# Handy after squash-merged PRs where GitHub auto-deletes the head branch.
+# Uses -D (force) since squash merges produce different SHAs than the local branch.
+# If the current branch is among the gone ones, switches to the default branch first.
+git-prune-gone() {
+  git fetch --prune || return 1
+
+  local gone
+  gone=$(git for-each-ref --format '%(refname:short) %(upstream:track)' refs/heads \
+         | awk '$2 == "[gone]" {print $1}')
+
+  if [[ -z "$gone" ]]; then
+    echo "No gone branches."
+    return 0
+  fi
+
+  local current default
+  current=$(git symbolic-ref --short HEAD 2>/dev/null)
+  if echo "$gone" | grep -qx "$current"; then
+    default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+    : "${default:=master}"
+    echo "Switching off '$current' to '$default' before deletion..."
+    git switch "$default" || return 1
+  fi
+
+  echo "$gone" | xargs git branch -D
+}
+
+git-pr-merge-clean() {
+  gh pr merge -s --admin || return 1
+  git checkout master || return 1
+  git pull || return 1
+  git-prune-gone
+}
