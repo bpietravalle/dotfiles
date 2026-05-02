@@ -83,9 +83,65 @@ git-prune-gone() {
   echo "$gone" | xargs git branch -D
 }
 
-git-pr-merge-clean() {
+# Squash-merge the PR for the current branch (admin override), switch to the
+# default branch, pull, and prune gone branches. Pre-flight checks fail fast
+# rather than leave you in a half-merged state.
+git-merge-pr-clean() {
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: not in a git repo" >&2
+    return 1
+  }
+
+  local branch
+  branch=$(git symbolic-ref --short HEAD 2>/dev/null) || {
+    echo "Error: detached HEAD" >&2
+    return 1
+  }
+
+  local default
+  default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  : "${default:=master}"
+
+  if [[ "$branch" == "$default" ]]; then
+    echo "Error: already on default branch '$default' — nothing to merge" >&2
+    return 1
+  fi
+
+  if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    echo "Error: uncommitted changes in working tree. Commit or stash first." >&2
+    return 1
+  fi
+
+  if [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+    echo "Error: untracked files present. Commit, stash, or clean first." >&2
+    return 1
+  fi
+
+  local upstream
+  upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || {
+    echo "Error: branch '$branch' has no upstream. Push first." >&2
+    return 1
+  }
+
+  local ahead
+  ahead=$(git rev-list --count "${upstream}..HEAD" 2>/dev/null || echo 0)
+  if (( ahead > 0 )); then
+    echo "Error: $ahead unpushed commit(s) on '$branch'. Push before merging." >&2
+    return 1
+  fi
+
+  local pr_state
+  pr_state=$(gh pr view --json state -q .state 2>/dev/null) || {
+    echo "Error: no PR found for '$branch'" >&2
+    return 1
+  }
+  if [[ "$pr_state" != "OPEN" ]]; then
+    echo "Error: PR is $pr_state (not OPEN)" >&2
+    return 1
+  fi
+
   gh pr merge -s --admin || return 1
-  git checkout master || return 1
+  git checkout "$default" || return 1
   git pull || return 1
   git-prune-gone
 }
