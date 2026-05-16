@@ -236,6 +236,237 @@ git-merge-pr-clean() {
   git-prune-gone
 }
 
+# List remote branches on origin that have no open PR (and aren't the default).
+# Excludes origin/HEAD and the default branch.
+git-remote-orphans() {
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: not in a git repo" >&2
+    return 1
+  }
+
+  local default
+  default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  : "${default:=master}"
+
+  local remote_branches pr_branches
+  remote_branches=$(git ls-remote --heads origin 2>/dev/null \
+                    | awk '{sub("refs/heads/", "", $2); print $2}' \
+                    | grep -vx "$default" \
+                    | sort -u)
+
+  pr_branches=$(gh pr list --state open --json headRefName -q '.[].headRefName' 2>/dev/null | sort -u)
+
+  comm -23 <(echo "$remote_branches") <(echo "$pr_branches")
+}
+
+# Delete remote branches on origin that have no open PR (and aren't the default).
+# Uses `git push origin --delete`. Confirms before deleting unless --yes is given.
+#
+# Usage:
+#   git-prune-remote-orphans            — delete (prompts for confirmation)
+#   git-prune-remote-orphans --yes      — delete without prompting
+#   git-prune-remote-orphans -y         — alias for --yes
+#   git-prune-remote-orphans --dry-run  — print what would be deleted and exit
+git-prune-remote-orphans() {
+  local dry_run=0 assume_yes=0
+  for arg in "$@"; do
+    case "$arg" in
+      --dry-run) dry_run=1 ;;
+      --yes|-y)  assume_yes=1 ;;
+      *) echo "Unknown arg: $arg" >&2; return 2 ;;
+    esac
+  done
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: not in a git repo" >&2
+    return 1
+  }
+
+  git fetch --prune >/dev/null 2>&1 || true
+
+  local branches
+  branches=$(git-remote-orphans)
+
+  if [[ -z "$branches" ]]; then
+    echo "No remote orphan branches on origin."
+    return 0
+  fi
+
+  local count
+  count=$(echo "$branches" | wc -l | tr -d ' ')
+
+  if (( dry_run )); then
+    echo "Dry run: would delete $count remote branch(es) on origin:"
+    echo "$branches" | sed 's/^/  /'
+    return 0
+  fi
+
+  if (( ! assume_yes )); then
+    echo "About to delete $count remote branch(es) on origin (no open PR):"
+    echo "$branches" | sed 's/^/  /'
+    printf "Proceed? [y/N] "
+    local reply
+    read -r reply
+    if [[ ! "$reply" =~ ^[Yy]$ ]]; then
+      echo "Aborted."
+      return 1
+    fi
+  fi
+
+  local deleted=0 failed=0
+  while IFS= read -r branch; do
+    [[ -z "$branch" ]] && continue
+    echo "Deleting origin/$branch"
+    if git push origin --delete "$branch" 2>/dev/null; then
+      deleted=$((deleted + 1))
+    else
+      echo "  failed to delete origin/$branch" >&2
+      failed=$((failed + 1))
+    fi
+  done <<< "$branches"
+
+  echo "==> Deleted $deleted remote branch(es)$( (( failed > 0 )) && echo "; $failed failed" )."
+}
+
+# List local branches that have no corresponding branch on origin.
+# Includes branches that never had upstream AND branches whose upstream was deleted.
+# Excludes origin/HEAD.
+git-local-orphans() {
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: not in a git repo" >&2
+    return 1
+  }
+
+  comm -23 \
+    <(git for-each-ref --format='%(refname:short)' refs/heads | sort) \
+    <(git for-each-ref --format='%(refname:short)' refs/remotes/origin \
+        | sed 's|^origin/||' | grep -v '^HEAD$' | sort -u)
+}
+
+# Delete local branches that don't exist on origin (output of git-local-orphans).
+# For each branch:
+#   - if checked out in a secondary worktree:
+#       unlock the worktree if locked, remove the worktree, then delete the branch
+#   - otherwise: delete the branch
+# The main worktree's current checkout is treated as a non-worktree case.
+#
+# Usage:
+#   git-prune-local-orphans            — delete (prompts for confirmation)
+#   git-prune-local-orphans --yes      — delete without prompting
+#   git-prune-local-orphans -y         — alias for --yes
+#   git-prune-local-orphans --dry-run  — print counts (worktree vs non-worktree) and exit
+git-prune-local-orphans() {
+  local dry_run=0 assume_yes=0
+  for arg in "$@"; do
+    case "$arg" in
+      --dry-run) dry_run=1 ;;
+      --yes|-y)  assume_yes=1 ;;
+      *) echo "Unknown arg: $arg" >&2; return 2 ;;
+    esac
+  done
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: not in a git repo" >&2
+    return 1
+  }
+
+  # Prune remote branches with no open PR first; their local trackers then
+  # surface as orphans for the local pass below.
+  git-prune-remote-orphans "$@" || return 1
+
+  git fetch --prune >/dev/null 2>&1 || true
+
+  local branches
+  branches=$(git-local-orphans)
+
+  if [[ -z "$branches" ]]; then
+    echo "No orphan branches."
+    return 0
+  fi
+
+  local wt_info main_wt
+  wt_info=$(git worktree list --porcelain)
+  main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
+
+  # Lookup: for a given branch name, emit "<path> <locked>" if it lives in a
+  # secondary worktree, else emit nothing.
+  _git_wt_lookup() {
+    local b="$1"
+    echo "$wt_info" | awk -v b="refs/heads/$b" -v main="$main_wt" '
+      BEGIN { RS = ""; FS = "\n" }
+      {
+        path = ""; br = ""; lk = 0
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ /^worktree /) path = substr($i, 10)
+          else if ($i ~ /^branch /) br = substr($i, 8)
+          else if ($i ~ /^locked/) lk = 1
+        }
+        if (br == b && path != main) { print path, lk; exit }
+      }'
+  }
+
+  local wt_count=0 nonwt_count=0 wt_list="" nonwt_list=""
+  while IFS= read -r branch; do
+    [[ -z "$branch" ]] && continue
+    local wt_path locked
+    read -r wt_path locked < <(_git_wt_lookup "$branch")
+    if [[ -n "$wt_path" ]]; then
+      wt_count=$((wt_count + 1))
+      wt_list+="  $branch  ($wt_path)$([[ "$locked" == "1" ]] && echo ' [locked]')"$'\n'
+    else
+      nonwt_count=$((nonwt_count + 1))
+      nonwt_list+="  $branch"$'\n'
+    fi
+  done <<< "$branches"
+
+  if (( dry_run )); then
+    echo "Dry run: would delete $wt_count worktree branch(es), $nonwt_count non-worktree branch(es)."
+    [[ -n "$wt_list" ]]    && { echo "Worktree branches:";    printf '%s' "$wt_list"; }
+    [[ -n "$nonwt_list" ]] && { echo "Non-worktree branches:"; printf '%s' "$nonwt_list"; }
+    unset -f _git_wt_lookup
+    return 0
+  fi
+
+  if (( ! assume_yes )); then
+    echo "About to delete $wt_count worktree branch(es) and $nonwt_count non-worktree branch(es):"
+    [[ -n "$wt_list" ]]    && { echo "Worktree branches:";    printf '%s' "$wt_list"; }
+    [[ -n "$nonwt_list" ]] && { echo "Non-worktree branches:"; printf '%s' "$nonwt_list"; }
+    printf "Proceed? [y/N] "
+    local reply
+    read -r reply
+    if [[ ! "$reply" =~ ^[Yy]$ ]]; then
+      echo "Aborted."
+      unset -f _git_wt_lookup
+      return 1
+    fi
+  fi
+
+  local deleted=0 failed=0
+  while IFS= read -r branch; do
+    [[ -z "$branch" ]] && continue
+    local wt_path locked
+    read -r wt_path locked < <(_git_wt_lookup "$branch")
+    if [[ -n "$wt_path" ]]; then
+      if [[ "$locked" == "1" ]]; then
+        echo "Unlocking worktree: $wt_path"
+        git worktree unlock "$wt_path" || true
+      fi
+      echo "Removing worktree: $wt_path"
+      git worktree remove --force "$wt_path" || true
+    fi
+    echo "Deleting branch: $branch"
+    if git branch -D "$branch" 2>/dev/null; then
+      deleted=$((deleted + 1))
+    else
+      echo "  failed (likely current branch in some worktree)" >&2
+      failed=$((failed + 1))
+    fi
+  done <<< "$branches"
+
+  unset -f _git_wt_lookup
+  echo "==> Deleted $deleted branch(es)$( (( failed > 0 )) && echo "; $failed failed" )."
+}
+
 # Merge ALL open PRs in the current repo. Optional args pass through to
 # `gh pr list` (e.g. --author=@me, --label foo). On a feature branch with an
 # open PR, that PR is merged first, then we sync default and iterate the rest.
