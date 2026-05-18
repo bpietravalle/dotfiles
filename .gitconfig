@@ -1,6 +1,7 @@
+[include]
+	path = ~/.gitconfig.local
 [user]
 	name = Brian Pietravalle
-	email = bpietravalle@gmail.com
 [color]
 	ui = auto
 [pull]

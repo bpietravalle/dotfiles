@@ -236,6 +236,27 @@ git-merge-pr-clean() {
   git-prune-gone
 }
 
+# ─── Orphan pruning ──────────────────────────────────────────────────────────
+#
+# Four functions; two read-only listers and two destructive prunners. They are
+# independent — `git-prune-local-orphans` does NOT call `git-prune-remote-orphans`
+# (decoupled so cleaning up your local worktrees never touches branches other
+# engineers have pushed to origin).
+#
+#   git-remote-orphans         — LIST remote branches on origin with no open PR
+#   git-prune-remote-orphans   — DELETE those remote branches (push --delete). Run
+#                                periodically when you want to clean GitHub. Affects
+#                                everyone — use with care on shared repos.
+#   git-local-orphans          — LIST local branches with no corresponding remote
+#                                branch on origin
+#   git-prune-local-orphans    — DELETE local-orphan branches AND remove the
+#                                worktrees that hold them. Also picks up branches
+#                                checked out in any secondary worktree (so claude
+#                                worktrees that were pushed to origin still get
+#                                cleaned locally). Never touches origin.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
 # List remote branches on origin that have no open PR (and aren't the default).
 # Excludes origin/HEAD and the default branch.
 git-remote-orphans() {
@@ -343,12 +364,20 @@ git-local-orphans() {
         | sed 's|^origin/||' | grep -v '^HEAD$' | sort -u)
 }
 
-# Delete local branches that don't exist on origin (output of git-local-orphans).
-# For each branch:
+# Local-only cleanup. Local branches that are EITHER:
+#   - orphans (no corresponding branch on origin — output of git-local-orphans), OR
+#   - checked out in a secondary worktree (regardless of remote state — so claude
+#     worktrees that were pushed up to origin still get cleaned locally; the
+#     remote branch stays until you run git-prune-remote-orphans).
+#
+# For each candidate:
 #   - if checked out in a secondary worktree:
 #       unlock the worktree if locked, remove the worktree, then delete the branch
 #   - otherwise: delete the branch
 # The main worktree's current checkout is treated as a non-worktree case.
+#
+# This function NEVER pushes to origin. If you want to clean up remote branches
+# too, run git-prune-remote-orphans separately.
 #
 # Usage:
 #   git-prune-local-orphans            — delete (prompts for confirmation)
@@ -370,23 +399,35 @@ git-prune-local-orphans() {
     return 1
   }
 
-  # Prune remote branches with no open PR first; their local trackers then
-  # surface as orphans for the local pass below.
-  git-prune-remote-orphans "$@" || return 1
-
   git fetch --prune >/dev/null 2>&1 || true
 
+  # Candidates: union of (local branches with no remote) and (branches checked
+  # out in any secondary worktree, even if they have a remote tracker).
+  local wt_info main_wt
+  wt_info=$(git worktree list --porcelain)
+  main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
+
+  local local_orphans secondary_wt_branches
+  local_orphans=$(git-local-orphans)
+  secondary_wt_branches=$(echo "$wt_info" | awk -v main="$main_wt" '
+    BEGIN { RS = ""; FS = "\n" }
+    {
+      path = ""; br = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^worktree /) path = substr($i, 10)
+        else if ($i ~ /^branch refs\/heads\//) br = substr($i, 19)
+      }
+      if (br != "" && path != main) print br
+    }')
+
   local branches
-  branches=$(git-local-orphans)
+  branches=$(printf '%s\n%s\n' "$local_orphans" "$secondary_wt_branches" \
+             | awk 'NF && !seen[$0]++')
 
   if [[ -z "$branches" ]]; then
     echo "No orphan branches."
     return 0
   fi
-
-  local wt_info main_wt
-  wt_info=$(git worktree list --porcelain)
-  main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
 
   # Lookup: for a given branch name, emit "<path> <locked>" if it lives in a
   # secondary worktree, else emit nothing.
