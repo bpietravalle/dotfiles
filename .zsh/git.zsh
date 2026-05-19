@@ -364,16 +364,20 @@ git-local-orphans() {
         | sed 's|^origin/||' | grep -v '^HEAD$' | sort -u)
 }
 
-# Local-only cleanup. Local branches that are EITHER:
-#   - orphans (no corresponding branch on origin — output of git-local-orphans), OR
-#   - checked out in a secondary worktree (regardless of remote state — so claude
-#     worktrees that were pushed up to origin still get cleaned locally; the
-#     remote branch stays until you run git-prune-remote-orphans).
+# Local-only cleanup. Three categories of candidate:
+#   1. Local branches with no corresponding branch on origin (git-local-orphans)
+#   2. Local branches checked out in a secondary worktree (regardless of remote
+#      state — so claude worktrees that were pushed to origin still get cleaned
+#      locally; the remote branch stays until you run git-prune-remote-orphans)
+#   3. Secondary worktrees with detached HEAD (no branch ref at all — typical of
+#      claude agent worktrees that died mid-flight; invisible to `git branch`
+#      and to remote-branch checks, so categories 1 and 2 miss them)
 #
 # For each candidate:
-#   - if checked out in a secondary worktree:
-#       unlock the worktree if locked, remove the worktree, then delete the branch
-#   - otherwise: delete the branch
+#   - categories 1 & 2 (branch-keyed): if checked out in a secondary worktree,
+#     unlock if locked, remove the worktree, then delete the branch; otherwise
+#     just delete the branch
+#   - category 3 (path-keyed, no branch): unlock if locked, remove the worktree
 # The main worktree's current checkout is treated as a non-worktree case.
 #
 # This function NEVER pushes to origin. If you want to clean up remote branches
@@ -407,7 +411,7 @@ git-prune-local-orphans() {
   wt_info=$(git worktree list --porcelain)
   main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
 
-  local local_orphans secondary_wt_branches
+  local local_orphans secondary_wt_branches detached_wt_paths
   local_orphans=$(git-local-orphans)
   secondary_wt_branches=$(echo "$wt_info" | awk -v main="$main_wt" '
     BEGIN { RS = ""; FS = "\n" }
@@ -420,12 +424,27 @@ git-prune-local-orphans() {
       if (br != "" && path != main) print br
     }')
 
+  # Detached-HEAD secondary worktrees — emit "<path>\t<locked>" so we can
+  # iterate them without re-parsing later. These have no branch ref, so they
+  # are invisible to the branch-keyed pass below.
+  detached_wt_paths=$(echo "$wt_info" | awk -v main="$main_wt" '
+    BEGIN { RS = ""; FS = "\n" }
+    {
+      path = ""; has_branch = 0; lk = 0
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^worktree /) path = substr($i, 10)
+        else if ($i ~ /^branch /) has_branch = 1
+        else if ($i ~ /^locked/) lk = 1
+      }
+      if (path != "" && path != main && !has_branch) print path "\t" lk
+    }')
+
   local branches
   branches=$(printf '%s\n%s\n' "$local_orphans" "$secondary_wt_branches" \
              | awk 'NF && !seen[$0]++')
 
-  if [[ -z "$branches" ]]; then
-    echo "No orphan branches."
+  if [[ -z "$branches" && -z "$detached_wt_paths" ]]; then
+    echo "No orphan branches or detached worktrees."
     return 0
   fi
 
@@ -446,32 +465,45 @@ git-prune-local-orphans() {
       }'
   }
 
-  local wt_count=0 nonwt_count=0 wt_list="" nonwt_list=""
-  while IFS= read -r branch; do
-    [[ -z "$branch" ]] && continue
-    local wt_path locked
-    read -r wt_path locked < <(_git_wt_lookup "$branch")
-    if [[ -n "$wt_path" ]]; then
-      wt_count=$((wt_count + 1))
-      wt_list+="  $branch  ($wt_path)$([[ "$locked" == "1" ]] && echo ' [locked]')"$'\n'
-    else
-      nonwt_count=$((nonwt_count + 1))
-      nonwt_list+="  $branch"$'\n'
-    fi
-  done <<< "$branches"
+  local wt_count=0 nonwt_count=0 detached_count=0
+  local wt_list="" nonwt_list="" detached_list=""
+  if [[ -n "$branches" ]]; then
+    while IFS= read -r branch; do
+      [[ -z "$branch" ]] && continue
+      local wt_path locked
+      read -r wt_path locked < <(_git_wt_lookup "$branch")
+      if [[ -n "$wt_path" ]]; then
+        wt_count=$((wt_count + 1))
+        wt_list+="  $branch  ($wt_path)$([[ "$locked" == "1" ]] && echo ' [locked]')"$'\n'
+      else
+        nonwt_count=$((nonwt_count + 1))
+        nonwt_list+="  $branch"$'\n'
+      fi
+    done <<< "$branches"
+  fi
+
+  if [[ -n "$detached_wt_paths" ]]; then
+    while IFS=$'\t' read -r wt_path locked; do
+      [[ -z "$wt_path" ]] && continue
+      detached_count=$((detached_count + 1))
+      detached_list+="  $wt_path$([[ "$locked" == "1" ]] && echo ' [locked]')"$'\n'
+    done <<< "$detached_wt_paths"
+  fi
 
   if (( dry_run )); then
-    echo "Dry run: would delete $wt_count worktree branch(es), $nonwt_count non-worktree branch(es)."
-    [[ -n "$wt_list" ]]    && { echo "Worktree branches:";    printf '%s' "$wt_list"; }
-    [[ -n "$nonwt_list" ]] && { echo "Non-worktree branches:"; printf '%s' "$nonwt_list"; }
+    echo "Dry run: would delete $wt_count worktree branch(es), $nonwt_count non-worktree branch(es), $detached_count detached worktree(s)."
+    [[ -n "$wt_list" ]]       && { echo "Worktree branches:";    printf '%s' "$wt_list"; }
+    [[ -n "$nonwt_list" ]]    && { echo "Non-worktree branches:"; printf '%s' "$nonwt_list"; }
+    [[ -n "$detached_list" ]] && { echo "Detached worktrees:";   printf '%s' "$detached_list"; }
     unset -f _git_wt_lookup
     return 0
   fi
 
   if (( ! assume_yes )); then
-    echo "About to delete $wt_count worktree branch(es) and $nonwt_count non-worktree branch(es):"
-    [[ -n "$wt_list" ]]    && { echo "Worktree branches:";    printf '%s' "$wt_list"; }
-    [[ -n "$nonwt_list" ]] && { echo "Non-worktree branches:"; printf '%s' "$nonwt_list"; }
+    echo "About to delete $wt_count worktree branch(es), $nonwt_count non-worktree branch(es), and $detached_count detached worktree(s):"
+    [[ -n "$wt_list" ]]       && { echo "Worktree branches:";    printf '%s' "$wt_list"; }
+    [[ -n "$nonwt_list" ]]    && { echo "Non-worktree branches:"; printf '%s' "$nonwt_list"; }
+    [[ -n "$detached_list" ]] && { echo "Detached worktrees:";   printf '%s' "$detached_list"; }
     printf "Proceed? [y/N] "
     local reply
     read -r reply
@@ -482,30 +514,49 @@ git-prune-local-orphans() {
     fi
   fi
 
-  local deleted=0 failed=0
-  while IFS= read -r branch; do
-    [[ -z "$branch" ]] && continue
-    local wt_path locked
-    read -r wt_path locked < <(_git_wt_lookup "$branch")
-    if [[ -n "$wt_path" ]]; then
+  local deleted=0 failed=0 wt_removed=0 wt_failed=0
+  if [[ -n "$branches" ]]; then
+    while IFS= read -r branch; do
+      [[ -z "$branch" ]] && continue
+      local wt_path locked
+      read -r wt_path locked < <(_git_wt_lookup "$branch")
+      if [[ -n "$wt_path" ]]; then
+        if [[ "$locked" == "1" ]]; then
+          echo "Unlocking worktree: $wt_path"
+          git worktree unlock "$wt_path" || true
+        fi
+        echo "Removing worktree: $wt_path"
+        git worktree remove --force "$wt_path" || true
+      fi
+      echo "Deleting branch: $branch"
+      if git branch -D "$branch" 2>/dev/null; then
+        deleted=$((deleted + 1))
+      else
+        echo "  failed (likely current branch in some worktree)" >&2
+        failed=$((failed + 1))
+      fi
+    done <<< "$branches"
+  fi
+
+  if [[ -n "$detached_wt_paths" ]]; then
+    while IFS=$'\t' read -r wt_path locked; do
+      [[ -z "$wt_path" ]] && continue
       if [[ "$locked" == "1" ]]; then
         echo "Unlocking worktree: $wt_path"
         git worktree unlock "$wt_path" || true
       fi
-      echo "Removing worktree: $wt_path"
-      git worktree remove --force "$wt_path" || true
-    fi
-    echo "Deleting branch: $branch"
-    if git branch -D "$branch" 2>/dev/null; then
-      deleted=$((deleted + 1))
-    else
-      echo "  failed (likely current branch in some worktree)" >&2
-      failed=$((failed + 1))
-    fi
-  done <<< "$branches"
+      echo "Removing detached worktree: $wt_path"
+      if git worktree remove --force "$wt_path" 2>/dev/null; then
+        wt_removed=$((wt_removed + 1))
+      else
+        echo "  failed to remove $wt_path" >&2
+        wt_failed=$((wt_failed + 1))
+      fi
+    done <<< "$detached_wt_paths"
+  fi
 
   unset -f _git_wt_lookup
-  echo "==> Deleted $deleted branch(es)$( (( failed > 0 )) && echo "; $failed failed" )."
+  echo "==> Deleted $deleted branch(es)$( (( failed > 0 )) && echo "; $failed failed" ); removed $wt_removed detached worktree(s)$( (( wt_failed > 0 )) && echo "; $wt_failed failed" )."
 }
 
 # Merge ALL open PRs in the current repo. Optional args pass through to
