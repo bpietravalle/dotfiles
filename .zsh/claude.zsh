@@ -784,6 +784,10 @@ _claude_procs_list() {
   # Snapshot live claude PIDs + registered detached daemons once.
   _claude_procs_snapshot_claude_pids
   _claude_procs_snapshot_daemon_pids
+  # Set on first orphan suspect so we re-snap claude PIDs at most once per
+  # `list` invocation — closes the race where a claude started between the
+  # initial snapshot and a candidate's PPID walk.
+  local _claude_pids_resnapped=0
   
   # Default count (unless --all)
   if [[ $show_all -eq 1 ]]; then
@@ -825,6 +829,13 @@ _claude_procs_list() {
       esac
       _claude_procs_is_registered_daemon "$pid" && continue
       local _owner=$(_claude_procs_owner "$pid")
+      if [[ -z "$_owner" && $_claude_pids_resnapped -eq 0 ]]; then
+        # Race recovery: a claude that started after the initial snapshot
+        # but before this walk would look like an orphan. Re-snap once.
+        _claude_procs_snapshot_claude_pids
+        _claude_pids_resnapped=1
+        _owner=$(_claude_procs_owner "$pid")
+      fi
       [[ -n "$_owner" ]] && continue
     fi
 
@@ -1049,6 +1060,7 @@ _claude_procs_bulk_kill() {
   done
 
   # Snapshot live claude + registered daemon PIDs (orphan classification).
+  local _claude_pids_resnapped=0
   if [[ $orphans_only -eq 1 ]]; then
     _claude_procs_snapshot_claude_pids
     _claude_procs_snapshot_daemon_pids
@@ -1091,6 +1103,13 @@ _claude_procs_bulk_kill() {
       esac
       _claude_procs_is_registered_daemon "$pid" && continue
       local _owner=$(_claude_procs_owner "$pid")
+      if [[ -z "$_owner" && $_claude_pids_resnapped -eq 0 ]]; then
+        # Race recovery: a claude that started after the initial snapshot
+        # but before this walk would look like an orphan. Re-snap once.
+        _claude_procs_snapshot_claude_pids
+        _claude_pids_resnapped=1
+        _owner=$(_claude_procs_owner "$pid")
+      fi
       [[ -n "$_owner" ]] && continue
     else
       if [[ "$type" == "claude" ]] || [[ "$type" == "daemon" ]] || [[ "$type" == "mcp" ]] || [[ "$type" == "lsp" ]]; then
