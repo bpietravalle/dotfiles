@@ -640,6 +640,60 @@ _claude_procs_should_warn() {
   fi
 }
 
+# Snapshot live `claude` PIDs once per `list` invocation. Sets
+# CLAUDE_PIDS_CACHE as a space-padded string for cheap `case` lookup.
+_claude_procs_snapshot_claude_pids() {
+  CLAUDE_PIDS_CACHE=" $(ps -eo pid,command \
+    | awk '/\.local\/bin\/claude/ || /\.local\/share\/claude/ { if ($0 !~ /grep/) print $1 }' \
+    | tr '\n' ' ') "
+}
+
+_claude_procs_is_claude_pid() {
+  case "$CLAUDE_PIDS_CACHE" in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
+# Snapshot intentional detached daemons by reading their PID-files. These
+# processes legitimately have no live claude ancestor and must NEVER be
+# classified as orphans.
+_claude_procs_snapshot_daemon_pids() {
+  local pid_files=(
+    "$HOME/.claude/procs/watcher.pid"
+    "$HOME/.claude/monitor/daemon.pid"
+  )
+  local pids=""
+  local f p
+  for f in "${pid_files[@]}"; do
+    [[ -f "$f" ]] || continue
+    p=$(cat "$f" 2>/dev/null | tr -d ' \n')
+    [[ -n "$p" ]] && pids="$pids $p"
+  done
+  DAEMON_PIDS_CACHE=" $pids "
+}
+
+_claude_procs_is_registered_daemon() {
+  case "$DAEMON_PIDS_CACHE" in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
+# Walk PPID chain from $1. Echo the first live claude-PID ancestor, or empty
+# string if the chain reaches PID 1 without one (= orphan).
+_claude_procs_owner() {
+  local pid="$1"
+  local guard=0
+  while [[ "$pid" != "0" && "$pid" != "1" && $guard -lt 30 ]]; do
+    if _claude_procs_is_claude_pid "$pid"; then
+      echo "$pid"
+      return 0
+    fi
+    # Combine declare+assign on one line; split form triggers a typeset
+    # print side effect in some zsh configs that leaks `ppid=NNN` to stdout.
+    local ppid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
+    [[ -z "$ppid" ]] && break
+    pid="$ppid"
+    guard=$((guard + 1))
+  done
+  echo ""
+}
+
 _claude_procs_etime_to_seconds() {
   local etime="$1"
   local seconds=0
@@ -686,7 +740,8 @@ _claude_procs_list() {
   local sort_by=""
   local count=0
   local show_all=0
-  
+  local orphans_only=0
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --filter|--type|-t)
@@ -713,11 +768,22 @@ _claude_procs_list() {
         show_all=1
         shift
         ;;
+      --orphans-only)
+        # Implies --all (orphans are what you want to see comprehensively)
+        # and constrains filter to Claude-spawn-shaped types only.
+        orphans_only=1
+        show_all=1
+        shift
+        ;;
       *)
         shift
         ;;
     esac
   done
+
+  # Snapshot live claude PIDs + registered detached daemons once.
+  _claude_procs_snapshot_claude_pids
+  _claude_procs_snapshot_daemon_pids
   
   # Default count (unless --all)
   if [[ $show_all -eq 1 ]]; then
@@ -732,6 +798,8 @@ _claude_procs_list() {
   while IFS= read -r line; do
     # Parse ps output: PID ELAPSED %CPU %MEM COMMAND
     local pid=$(echo "$line" | awk '{print $1}')
+    # Skip continuation lines from multi-line `ps` COMMAND fields (heredoc bash, python -c, etc.)
+    [[ ! "$pid" =~ ^[0-9]+$ ]] && continue
     local etime=$(echo "$line" | awk '{print $2}')
     local cpu=$(echo "$line" | awk '{print $3}')
     local mem=$(echo "$line" | awk '{print $4}')
@@ -744,7 +812,22 @@ _claude_procs_list() {
     if [[ "$filter" != "all" ]] && [[ "$type" != "$filter" ]]; then
       continue
     fi
-    
+
+    # --orphans-only: any non-claude, non-daemon process whose PPID chain
+    # has no live claude ancestor. `daemon` type is excluded (categorize
+    # tags watcher scripts). Registered intentional daemons (PIDs in
+    # ~/.claude/{procs,monitor}/*.pid) are also excluded — those legitimately
+    # have no claude ancestor by design. Everything else is surfaced; the
+    # operator decides per-row when killing (this is `list`, not `kill`).
+    if [[ $orphans_only -eq 1 ]]; then
+      case "$type" in
+        claude|daemon) continue ;;
+      esac
+      _claude_procs_is_registered_daemon "$pid" && continue
+      local _owner=$(_claude_procs_owner "$pid")
+      [[ -n "$_owner" ]] && continue
+    fi
+
     local warn=$(_claude_procs_should_warn "$type" "$etime" "$mem")
     
     # Store data
@@ -923,7 +1006,8 @@ _claude_procs_bulk_kill() {
   local sort_by=""
   local count=0
   local force=0
-  
+  local orphans_only=0
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --filter|--type|-t)
@@ -950,12 +1034,29 @@ _claude_procs_bulk_kill() {
         force=1
         shift
         ;;
+      --orphans)
+        # Kill processes whose PPID chain has no live claude ancestor.
+        # Replaces the default protected-types filter — mcp/lsp are now
+        # eligible (that's the point), but claude/daemon and registered
+        # detached daemons remain excluded.
+        orphans_only=1
+        shift
+        ;;
       *)
         shift
         ;;
     esac
   done
-  
+
+  # Snapshot live claude + registered daemon PIDs (orphan classification).
+  if [[ $orphans_only -eq 1 ]]; then
+    _claude_procs_snapshot_claude_pids
+    _claude_procs_snapshot_daemon_pids
+    # Default to ALL orphans (no top-N truncation) — the operator asked for
+    # orphan cleanup specifically, surface the full set.
+    [[ $count -eq 0 ]] && count=999999
+  fi
+
   # Default count
   [[ $count -eq 0 ]] && count=5
   
@@ -964,6 +1065,8 @@ _claude_procs_bulk_kill() {
   
   while IFS= read -r line; do
     local pid=$(echo "$line" | awk '{print $1}')
+    # Skip continuation lines from multi-line `ps` COMMAND fields (heredoc bash, python -c, etc.)
+    [[ ! "$pid" =~ ^[0-9]+$ ]] && continue
     local ppid=$(echo "$line" | awk '{print $2}')
     local etime=$(echo "$line" | awk '{print $3}')
     local cpu=$(echo "$line" | awk '{print $4}')
@@ -978,11 +1081,23 @@ _claude_procs_bulk_kill() {
       continue
     fi
     
-    # Skip protected types
-    if [[ "$type" == "claude" ]] || [[ "$type" == "daemon" ]] || [[ "$type" == "mcp" ]] || [[ "$type" == "lsp" ]]; then
-      continue
+    # Protected-type filter: in default mode, never touch claude/daemon/mcp/lsp.
+    # In --orphans mode, mcp/lsp ARE eligible (that's the whole point); only
+    # claude itself + registered detached daemons stay protected, and we add
+    # the PPID-orphan requirement.
+    if [[ $orphans_only -eq 1 ]]; then
+      case "$type" in
+        claude|daemon) continue ;;
+      esac
+      _claude_procs_is_registered_daemon "$pid" && continue
+      local _owner=$(_claude_procs_owner "$pid")
+      [[ -n "$_owner" ]] && continue
+    else
+      if [[ "$type" == "claude" ]] || [[ "$type" == "daemon" ]] || [[ "$type" == "mcp" ]] || [[ "$type" == "lsp" ]]; then
+        continue
+      fi
     fi
-    
+
     local warn=$(_claude_procs_should_warn "$type" "$etime" "$mem")
 
     # Store data
@@ -1046,7 +1161,11 @@ _claude_procs_bulk_kill() {
   fi
   
   # Show what will be killed
-  echo "Processes to kill (top $count):"
+  if [[ $orphans_only -eq 1 ]]; then
+    echo "Orphans to kill (no live claude ancestor):"
+  else
+    echo "Processes to kill (top $count):"
+  fi
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   printf "%-5s %-12s %4s %5s %-8s %-30s\n" "PID" "RUNTIME" "CPU%" "MEM%" "TYPE" "COMMAND"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -1121,6 +1240,8 @@ _claude_procs_interactive_cleanup() {
   
   while IFS= read -r line; do
     read pid etime cpu mem cmd <<< "$line"
+    # Skip continuation lines from multi-line `ps` COMMAND fields (heredoc bash, python -c, etc.)
+    [[ ! "$pid" =~ ^[0-9]+$ ]] && continue
     local cwd=$(_claude_procs_get_cwd "$pid")
     local type=$(_claude_procs_categorize "$cmd" "$cwd")
     
@@ -1225,6 +1346,8 @@ _claude_procs_watch() {
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
       local pid=$(echo "$line" | awk '{print $1}')
+      # Skip continuation lines from multi-line `ps` COMMAND fields (heredoc bash, python -c, etc.)
+      [[ ! "$pid" =~ ^[0-9]+$ ]] && continue
       local mem_pct=$(echo "$line" | awk '{print $4}')
       local cmd=$(echo "$line" | awk '{for(i=5;i<=NF;i++) printf "%s ", $i; print ""}')
       

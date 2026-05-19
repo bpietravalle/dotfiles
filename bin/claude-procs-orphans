@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# claude-procs-orphans — group Claude MCP/agent/LSP children by their parent
+# `claude` session, surface orphans (no live claude ancestor).
+#
+# Dry-run only. Pipe to `xargs kill` (or feed to claude-procs kill) if you want
+# to actually reap.
+#
+# Usage:
+#   claude-procs-orphans          # grouped report
+#   claude-procs-orphans --orphans-only   # just orphan PIDs, one per line
+#   claude-procs-orphans --tsv    # tab-separated rows (pid owner age cpu mem cwd cmd)
+#
+# Compatible with macOS bash 3.2 (no mapfile, no associative arrays).
+
+set -u
+
+mode="report"
+case "${1:-}" in
+  --orphans-only) mode="orphans-only" ;;
+  --tsv)          mode="tsv" ;;
+  -h|--help)
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  "") ;;
+  *) echo "unknown arg: $1" >&2; exit 2 ;;
+esac
+
+CHILD_GREP='node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx'
+
+# 1. Snapshot live claude PIDs into a space-separated string.
+CLAUDE_PIDS=$(ps -eo pid,command \
+  | awk '/\.local\/bin\/claude/ || /\.local\/share\/claude/ { if ($0 !~ /grep/) print $1 }' \
+  | tr '\n' ' ')
+
+is_claude_pid() {
+  local target="$1"
+  case " $CLAUDE_PIDS " in *" $target "*) return 0 ;; *) return 1 ;; esac
+}
+
+# Walk PPID chain. Echo first claude PID encountered, or empty.
+find_claude_ancestor() {
+  local pid="$1"
+  local guard=0
+  while [ "$pid" != "0" ] && [ "$pid" != "1" ] && [ $guard -lt 30 ]; do
+    if is_claude_pid "$pid"; then
+      echo "$pid"
+      return 0
+    fi
+    local ppid
+    ppid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
+    [ -z "$ppid" ] && break
+    pid="$ppid"
+    guard=$((guard + 1))
+  done
+  echo ""
+}
+
+get_cwd() {
+  local pid="$1"
+  local c
+  c=$(lsof -p "$pid" -a -d cwd -Fn 2>/dev/null | awk '/^n/{sub(/^n/,""); print; exit}')
+  echo "${c:-?}"
+}
+
+# 2. Build a TSV in-memory: owner<TAB>pid<TAB>age<TAB>cpu<TAB>mem<TAB>cwd<TAB>cmd
+ROWS=""
+while IFS= read -r line; do
+  pid=$(awk '{print $1}' <<< "$line")
+  [[ ! "$pid" =~ ^[0-9]+$ ]] && continue
+  is_claude_pid "$pid" && continue
+
+  etime=$(awk '{print $2}' <<< "$line")
+  cpu=$(awk '{print $3}' <<< "$line")
+  mem=$(awk '{print $4}' <<< "$line")
+  cmd=$(awk '{for(i=5;i<=NF;i++) printf "%s ", $i; print ""}' <<< "$line")
+  cmd="${cmd:0:60}"
+
+  owner=$(find_claude_ancestor "$pid")
+  [ -z "$owner" ] && owner="ORPHAN"
+
+  cwd=$(get_cwd "$pid")
+  cwd="${cwd/#$HOME/~}"
+
+  # Strip any tabs from cmd to keep TSV honest.
+  cmd_clean=$(printf '%s' "$cmd" | tr '\t' ' ')
+
+  ROWS="${ROWS}${owner}	${pid}	${etime}	${cpu}	${mem}	${cwd}	${cmd_clean}
+"
+done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E "$CHILD_GREP" | grep -v grep | grep -v claude-procs)
+
+if [ "$mode" = "tsv" ]; then
+  printf '%s' "$ROWS"
+  exit 0
+fi
+
+if [ "$mode" = "orphans-only" ]; then
+  printf '%s' "$ROWS" | awk -F'\t' '$1=="ORPHAN"{print $2}' | sort -n
+  exit 0
+fi
+
+# Default: grouped report.
+
+print_header() {
+  echo
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "$1"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  printf "  %-7s %8s %5s %5s %-30s %s\n" "PID" "AGE" "CPU%" "MEM%" "CWD" "COMMAND"
+}
+
+print_group() {
+  local owner="$1"
+  local found=0
+  while IFS=$'\t' read -r o pid etime cpu mem cwd cmd; do
+    [ "$o" = "$owner" ] || continue
+    printf "  %-7s %8s %5s %5s %-30s %s\n" "$pid" "$etime" "$cpu" "$mem" "$cwd" "$cmd"
+    found=1
+  done <<< "$ROWS"
+  [ $found -eq 0 ] && echo "  (no child processes)"
+}
+
+claude_count=0
+for cpid in $CLAUDE_PIDS; do
+  claude_count=$((claude_count + 1))
+  ccwd=$(get_cwd "$cpid")
+  print_header "claude PID $cpid  (cwd: ${ccwd/#$HOME/~})"
+  print_group "$cpid"
+done
+
+orphan_count=$(printf '%s' "$ROWS" | awk -F'\t' '$1=="ORPHAN"' | wc -l | tr -d ' ')
+print_header "ORPHANS  (no live claude ancestor — safe to kill)"
+if [ "$orphan_count" -eq 0 ]; then
+  echo "  (none — clean state)"
+else
+  print_group "ORPHAN"
+fi
+
+echo
+echo "Summary: $claude_count live claude session(s), $orphan_count orphan(s)"
