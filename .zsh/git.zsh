@@ -111,10 +111,49 @@ git-prune-gone() {
 #   git-merge-pr-clean             — merge the PR for the current branch
 #   git-merge-pr-clean <pr-number> — merge a specific PR (caller already on default)
 #
+# Optional cleanup flags (in addition to the always-on git-prune-gone pass):
+#   -l            also run `git-prune-orphans` (local orphans + stale worktrees)
+#   -r            also run `git-prune-orphans -r` (SAFE remote + local)
+#   -R            also run `git-prune-orphans -R` (AGGRESSIVE remote + local) —
+#                 deletes EVERY remote branch with no open PR, regardless of
+#                 whether you have it locally. Affects every engineer.
+#   -lr / -rl     same as -r alone (safe-mode already chains local)
+#   -lR / -Rl     same as -R alone (aggressive already chains local)
+# -r and -R are mutually exclusive. No confirmation — the prune commands run
+# immediately once the merge completes.
+#
 # Branch mode handles secondary worktrees: if invoked from a worktree where
 # the branch is checked out, after merging it cd's to the main worktree to
 # do the checkout/pull/prune (and tries to remove the now-stale worktree).
 git-merge-pr-clean() {
+  local prune_local=0 prune_remote_mode="" pr_arg=""
+  while (( $# > 0 )); do
+    case "$1" in
+      -l)
+        prune_local=1; shift ;;
+      -r)
+        [[ "$prune_remote_mode" == "all" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
+        prune_remote_mode="safe"; shift ;;
+      -R)
+        [[ "$prune_remote_mode" == "safe" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
+        prune_remote_mode="all"; shift ;;
+      -lr|-rl)
+        [[ "$prune_remote_mode" == "all" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
+        prune_local=1; prune_remote_mode="safe"; shift ;;
+      -lR|-Rl)
+        [[ "$prune_remote_mode" == "safe" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
+        prune_local=1; prune_remote_mode="all"; shift ;;
+      -*)
+        echo "Error: unknown flag '$1'" >&2; return 2 ;;
+      *)
+        if [[ -n "$pr_arg" ]]; then
+          echo "Error: multiple positional args (already have '$pr_arg')" >&2
+          return 2
+        fi
+        pr_arg="$1"; shift ;;
+    esac
+  done
+
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
     echo "Error: not in a git repo" >&2
     return 1
@@ -124,7 +163,16 @@ git-merge-pr-clean() {
   default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
   : "${default:=master}"
 
-  local pr_arg="${1:-}"
+  # Helper: invoked at the end of each mode's success path. Remote modes already
+  # chain the local pass via git-prune-orphans, so a bare -l only fires when no
+  # remote mode is set.
+  _post_merge_prune() {
+    case "$prune_remote_mode" in
+      safe) git-prune-orphans -r ;;
+      all)  git-prune-orphans -R ;;
+      "")   (( prune_local )) && git-prune-orphans ;;
+    esac
+  }
 
   if [[ -n "$pr_arg" ]]; then
     # PR-number mode: merge by API, then sync local default if we're on it
@@ -155,6 +203,7 @@ git-merge-pr-clean() {
       git pull || return 1
       git-prune-gone
     fi
+    _post_merge_prune
     return 0
   fi
 
@@ -234,19 +283,25 @@ git-merge-pr-clean() {
   git checkout "$default" || return 1
   git pull || return 1
   git-prune-gone
+  _post_merge_prune
 }
 
 # ─── Orphan pruning ──────────────────────────────────────────────────────────
 #
-# Four functions; two read-only listers and two destructive prunners. They are
-# independent — `git-prune-local-orphans` does NOT call `git-prune-remote-orphans`
-# (decoupled so cleaning up your local worktrees never touches branches other
-# engineers have pushed to origin).
+# Unified entry point + four primitives. Default: local only (safe in shared
+# repos — never touches origin, so other engineers' branches are preserved).
 #
+#   git-prune-orphans          — UNIFIED entry point. Default = local only.
+#                                -r → SAFE remote (only delete origin/<b> where
+#                                     <b> also exists locally) THEN local.
+#                                -R → AGGRESSIVE remote (every remote branch with
+#                                     no open PR, regardless of local) THEN local.
+#                                Remote prune runs FIRST so subsequent local prune
+#                                surfaces branches whose remote was just deleted.
 #   git-remote-orphans         — LIST remote branches on origin with no open PR
-#   git-prune-remote-orphans   — DELETE those remote branches (push --delete). Run
-#                                periodically when you want to clean GitHub. Affects
-#                                everyone — use with care on shared repos.
+#   git-prune-remote-orphans   — DELETE those remote branches (push --delete).
+#                                Aggressive; same as `git-prune-orphans -R` minus
+#                                the chained local prune. Affects everyone.
 #   git-local-orphans          — LIST local branches with no corresponding remote
 #                                branch on origin
 #   git-prune-local-orphans    — DELETE local-orphan branches AND remove the
@@ -281,19 +336,16 @@ git-remote-orphans() {
 }
 
 # Delete remote branches on origin that have no open PR (and aren't the default).
-# Uses `git push origin --delete`. Confirms before deleting unless --yes is given.
+# Uses `git push origin --delete`. No confirmation — runs immediately.
 #
 # Usage:
-#   git-prune-remote-orphans            — delete (prompts for confirmation)
-#   git-prune-remote-orphans --yes      — delete without prompting
-#   git-prune-remote-orphans -y         — alias for --yes
+#   git-prune-remote-orphans            — delete
 #   git-prune-remote-orphans --dry-run  — print what would be deleted and exit
 git-prune-remote-orphans() {
-  local dry_run=0 assume_yes=0
+  local dry_run=0
   for arg in "$@"; do
     case "$arg" in
       --dry-run) dry_run=1 ;;
-      --yes|-y)  assume_yes=1 ;;
       *) echo "Unknown arg: $arg" >&2; return 2 ;;
     esac
   done
@@ -322,17 +374,7 @@ git-prune-remote-orphans() {
     return 0
   fi
 
-  if (( ! assume_yes )); then
-    echo "About to delete $count remote branch(es) on origin (no open PR):"
-    echo "$branches" | sed 's/^/  /'
-    printf "Proceed? [y/N] "
-    local reply
-    read -r reply
-    if [[ ! "$reply" =~ ^[Yy]$ ]]; then
-      echo "Aborted."
-      return 1
-    fi
-  fi
+  echo "Deleting $count remote branch(es) on origin (no open PR):"
 
   local deleted=0 failed=0
   while IFS= read -r branch; do
@@ -364,6 +406,94 @@ git-local-orphans() {
         | sed 's|^origin/||' | grep -v '^HEAD$' | sort -u)
 }
 
+# Unified orphan pruner — see § header at top of "Orphan pruning" section.
+#
+# Usage:
+#   git-prune-orphans                  — local only (default; safe in shared repos)
+#   git-prune-orphans -r               — SAFE remote (locally-present ∩ orphan), then local
+#   git-prune-orphans -R               — AGGRESSIVE remote (all orphans), then local
+#   git-prune-orphans --dry-run        — works with any mode
+#
+# No confirmation prompts — runs immediately. -r and -R are mutually exclusive.
+# Remote prune always runs before local prune so the local pass surfaces branches
+# whose remote was just deleted.
+git-prune-orphans() {
+  local mode_remote="" dry_run=0
+  for arg in "$@"; do
+    case "$arg" in
+      -r)
+        [[ -n "$mode_remote" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
+        mode_remote="safe" ;;
+      -R|--all-remote)
+        [[ -n "$mode_remote" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
+        mode_remote="all" ;;
+      --dry-run) dry_run=1 ;;
+      *) echo "Unknown arg: $arg" >&2; return 2 ;;
+    esac
+  done
+
+  local fwd_args=()
+  (( dry_run )) && fwd_args+=(--dry-run)
+
+  if [[ "$mode_remote" == "all" ]]; then
+    git-prune-remote-orphans "${fwd_args[@]}" || return 1
+  elif [[ "$mode_remote" == "safe" ]]; then
+    _git_prune_remote_safe "$dry_run" || return 1
+  fi
+
+  git-prune-local-orphans "${fwd_args[@]}"
+}
+
+# Safe-mode remote prune (helper for git-prune-orphans -r). Deletes origin/<b>
+# only when <b> also exists in the local branch list AND is in the remote-orphan
+# set (no open PR). Snapshot is taken before any mutation, so branches that
+# exist ONLY on origin (other engineers' work) are never touched.
+_git_prune_remote_safe() {
+  local dry_run="$1"
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: not in a git repo" >&2
+    return 1
+  }
+
+  git fetch --prune >/dev/null 2>&1 || true
+
+  local local_branches remote_orphans candidates
+  local_branches=$(git for-each-ref --format='%(refname:short)' refs/heads | sort -u)
+  remote_orphans=$(git-remote-orphans | sort -u)
+  candidates=$(comm -12 <(echo "$local_branches") <(echo "$remote_orphans"))
+
+  if [[ -z "$candidates" ]]; then
+    echo "No safe remote-orphan candidates (no local branches intersect the remote-orphan set)."
+    return 0
+  fi
+
+  local count
+  count=$(echo "$candidates" | wc -l | tr -d ' ')
+
+  if (( dry_run )); then
+    echo "Dry run: would delete $count remote branch(es) on origin (safe mode — locally present):"
+    echo "$candidates" | sed 's/^/  /'
+    return 0
+  fi
+
+  echo "Deleting $count remote branch(es) on origin (safe mode — locally present, no open PR):"
+
+  local deleted=0 failed=0
+  while IFS= read -r branch; do
+    [[ -z "$branch" ]] && continue
+    echo "Deleting origin/$branch"
+    if git push origin --delete "$branch" 2>/dev/null; then
+      deleted=$((deleted + 1))
+    else
+      echo "  failed to delete origin/$branch" >&2
+      failed=$((failed + 1))
+    fi
+  done <<< "$candidates"
+
+  echo "==> Deleted $deleted remote branch(es)$( (( failed > 0 )) && echo "; $failed failed" )."
+}
+
 # Local-only cleanup. Three categories of candidate:
 #   1. Local branches with no corresponding branch on origin (git-local-orphans)
 #   2. Local branches checked out in a secondary worktree (regardless of remote
@@ -384,16 +514,13 @@ git-local-orphans() {
 # too, run git-prune-remote-orphans separately.
 #
 # Usage:
-#   git-prune-local-orphans            — delete (prompts for confirmation)
-#   git-prune-local-orphans --yes      — delete without prompting
-#   git-prune-local-orphans -y         — alias for --yes
+#   git-prune-local-orphans            — delete (no confirmation; runs immediately)
 #   git-prune-local-orphans --dry-run  — print counts (worktree vs non-worktree) and exit
 git-prune-local-orphans() {
-  local dry_run=0 assume_yes=0
+  local dry_run=0
   for arg in "$@"; do
     case "$arg" in
       --dry-run) dry_run=1 ;;
-      --yes|-y)  assume_yes=1 ;;
       *) echo "Unknown arg: $arg" >&2; return 2 ;;
     esac
   done
@@ -499,20 +626,10 @@ git-prune-local-orphans() {
     return 0
   fi
 
-  if (( ! assume_yes )); then
-    echo "About to delete $wt_count worktree branch(es), $nonwt_count non-worktree branch(es), and $detached_count detached worktree(s):"
-    [[ -n "$wt_list" ]]       && { echo "Worktree branches:";    printf '%s' "$wt_list"; }
-    [[ -n "$nonwt_list" ]]    && { echo "Non-worktree branches:"; printf '%s' "$nonwt_list"; }
-    [[ -n "$detached_list" ]] && { echo "Detached worktrees:";   printf '%s' "$detached_list"; }
-    printf "Proceed? [y/N] "
-    local reply
-    read -r reply
-    if [[ ! "$reply" =~ ^[Yy]$ ]]; then
-      echo "Aborted."
-      unset -f _git_wt_lookup
-      return 1
-    fi
-  fi
+  echo "Deleting $wt_count worktree branch(es), $nonwt_count non-worktree branch(es), and $detached_count detached worktree(s):"
+  [[ -n "$wt_list" ]]       && { echo "Worktree branches:";    printf '%s' "$wt_list"; }
+  [[ -n "$nonwt_list" ]]    && { echo "Non-worktree branches:"; printf '%s' "$nonwt_list"; }
+  [[ -n "$detached_list" ]] && { echo "Detached worktrees:";   printf '%s' "$detached_list"; }
 
   local deleted=0 failed=0 wt_removed=0 wt_failed=0
   if [[ -n "$branches" ]]; then
@@ -559,16 +676,37 @@ git-prune-local-orphans() {
   echo "==> Deleted $deleted branch(es)$( (( failed > 0 )) && echo "; $failed failed" ); removed $wt_removed detached worktree(s)$( (( wt_failed > 0 )) && echo "; $wt_failed failed" )."
 }
 
-# Merge ALL open PRs in the current repo. Optional args pass through to
-# `gh pr list` (e.g. --author=@me, --label foo). On a feature branch with an
-# open PR, that PR is merged first, then we sync default and iterate the rest.
-# Stops on the first failure so you can intervene.
+# Merge every open PR in numerical order, then sync and prune. Flow:
+#   1. Switch to default branch if not on it (refuses if uncommitted/untracked changes).
+#   2. List open PRs and merge each with `gh pr merge -s --admin` in numerical order.
+#      Skips PRs that are non-OPEN or CONFLICTING; stops on a hard merge failure.
+#   3. `git pull` to sync the now-merged default.
+#   4. `git-prune-orphans` (with -r / -R passed through).
+#
+# Flags:
+#   -r            pass -r to git-prune-orphans (SAFE remote + local)
+#   -R            pass -R to git-prune-orphans (AGGRESSIVE remote + local)
+#   <other>       passed through to `gh pr list` (e.g. --author=@me, --label foo)
 #
 # Examples:
-#   git-all-prs-merged-clean                  # merge every open PR
-#   git-all-prs-merged-clean --author=@me     # only your PRs
-#   git-all-prs-merged-clean --label ready    # only label-filtered PRs
+#   git-all-prs-merged-clean                       # merge every open PR, then local prune
+#   git-all-prs-merged-clean -r                    # ... then safe remote + local prune
+#   git-all-prs-merged-clean -R --author=@me       # only your PRs; aggressive remote prune
 git-all-prs-merged-clean() {
+  local prune_remote_mode=""
+  local -a gh_args=()
+  for arg in "$@"; do
+    case "$arg" in
+      -r)
+        [[ "$prune_remote_mode" == "all" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
+        prune_remote_mode="safe" ;;
+      -R)
+        [[ "$prune_remote_mode" == "safe" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
+        prune_remote_mode="all" ;;
+      *) gh_args+=("$arg") ;;
+    esac
+  done
+
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
     echo "Error: not in a git repo" >&2
     return 1
@@ -578,76 +716,70 @@ git-all-prs-merged-clean() {
   default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
   : "${default:=master}"
 
-  # If on a feature branch with an open PR, merge it first via branch-mode
-  local branch
-  branch=$(git symbolic-ref --short HEAD 2>/dev/null)
-  if [[ -n "$branch" && "$branch" != "$default" ]]; then
-    if [[ "$(gh pr view --json state -q .state 2>/dev/null)" == "OPEN" ]]; then
-      echo "==> Merging current branch PR ($branch)..."
-      git-merge-pr-clean || return 1
-    fi
-  fi
-
-  # Ensure we're on default before iterating
+  # 1. Switch to default if not on it
   local current
   current=$(git symbolic-ref --short HEAD 2>/dev/null)
   if [[ "$current" != "$default" ]]; then
+    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+      echo "Error: uncommitted changes on '$current'; commit or stash first" >&2
+      return 1
+    fi
+    if [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+      echo "Error: untracked files on '$current'; commit, stash, or clean first" >&2
+      return 1
+    fi
+    echo "==> Switching to '$default' (was on '$current')"
     git checkout "$default" || return 1
-    git pull || return 1
   fi
 
+  # 2. List open PRs in numerical order, merge each
   local prs
-  prs=$(gh pr list --json number -q '.[].number' "$@" 2>/dev/null) || {
+  prs=$(gh pr list --state open --json number --jq '.[].number' "${gh_args[@]}" 2>/dev/null | sort -n) || {
     echo "Error: gh pr list failed" >&2
     return 1
   }
 
-  if [[ -z "$prs" ]]; then
-    echo "No open PRs remaining."
-    return 0
+  local count=0 skipped=0
+  if [[ -n "$prs" ]]; then
+    local pr pr_info pr_state pr_mergeable
+    while IFS= read -r pr; do
+      [[ -z "$pr" ]] && continue
+      pr_info=$(gh pr view "$pr" --json state,mergeable -q '.state + " " + .mergeable' 2>/dev/null) || {
+        echo "PR #$pr: view failed — skipping" >&2
+        skipped=$((skipped + 1))
+        continue
+      }
+      read -r pr_state pr_mergeable <<< "$pr_info"
+      if [[ "$pr_state" != "OPEN" ]]; then
+        echo "PR #$pr: $pr_state — skipping"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      if [[ "$pr_mergeable" == "CONFLICTING" ]]; then
+        echo "PR #$pr: CONFLICTING — skipping"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      echo "==> Merging PR #$pr"
+      if gh pr merge "$pr" -s --admin; then
+        count=$((count + 1))
+      else
+        echo "Failed to merge PR #$pr — stopping (merged $count before failure)" >&2
+        return 1
+      fi
+    done <<< "$prs"
+    echo "==> Merged $count PR(s)$( (( skipped > 0 )) && echo "; $skipped skipped" )."
+  else
+    echo "No open PRs."
   fi
 
-  # Iterate via direct gh pr merge — server-side, no local sync needed per PR.
-  # Single pull + prune at the end is faster and avoids touching worktrees mid-loop.
-  local count=0 fail=0
-  while IFS= read -r pr; do
-    [[ -z "$pr" ]] && continue
-    local pr_info pr_state pr_mergeable
-    pr_info=$(gh pr view "$pr" --json state,mergeable -q '.state + " " + .mergeable' 2>/dev/null) || {
-      echo "PR #$pr: not found, skipping" >&2
-      fail=$((fail + 1))
-      continue
-    }
-    read -r pr_state pr_mergeable <<< "$pr_info"
-    if [[ "$pr_state" != "OPEN" ]]; then
-      echo "PR #$pr: $pr_state, skipping"
-      continue
-    fi
-    if [[ "$pr_mergeable" == "CONFLICTING" ]]; then
-      echo "PR #$pr: CONFLICTING, skipping"
-      fail=$((fail + 1))
-      continue
-    fi
-    if [[ "$pr_mergeable" == "UNKNOWN" ]]; then
-      echo "PR #$pr: mergeability UNKNOWN (GitHub still computing), skipping"
-      fail=$((fail + 1))
-      continue
-    fi
-    echo "==> Merging PR #$pr..."
-    if gh pr merge "$pr" -s --admin; then
-      count=$((count + 1))
-    else
-      echo "Stopped at PR #$pr — fix and re-run." >&2
-      echo "==> Merged $count PR(s) before failure."
-      git pull || true
-      git-prune-gone
-      return 1
-    fi
-  done <<< "$prs"
-
-  # Final sync after all merges
+  # 3. Pull synced default
   git pull || return 1
-  git-prune-gone
 
-  echo "==> Merged $count PR(s)$( (( fail > 0 )) && echo "; $fail unresolved" )."
+  # 4. Prune (with -r / -R passthrough)
+  case "$prune_remote_mode" in
+    safe) git-prune-orphans -r ;;
+    all)  git-prune-orphans -R ;;
+    "")   git-prune-orphans ;;
+  esac
 }
