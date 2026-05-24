@@ -379,7 +379,7 @@ git-pr-related-branches() {
 # by construction.
 #
 # Designed for the case where multiple Claude sessions share a repo: existing
-# global pruners (git-prune-gone, git-prune-local-orphans) would reap state
+# global pruners (git-prune-gone, _git_prune_local_orphans) would reap state
 # belonging to OTHER live sessions; this command stays scoped to one PR.
 #
 # Usage:
@@ -558,13 +558,13 @@ git-merge-pr-clean-scoped() {
 #                                     no open PR, regardless of local) THEN local.
 #                                Remote prune runs FIRST so subsequent local prune
 #                                surfaces branches whose remote was just deleted.
-#   git-remote-orphans         — LIST remote branches on origin with no open PR
-#   git-prune-remote-orphans   — DELETE those remote branches (push --delete).
+#   _git_remote_orphans         — LIST remote branches on origin with no open PR
+#   _git_prune_remote_orphans   — DELETE those remote branches (push --delete).
 #                                Aggressive; same as `git-prune-orphans -R` minus
 #                                the chained local prune. Affects everyone.
-#   git-local-orphans          — LIST local branches with no corresponding remote
+#   _git_local_orphans          — LIST local branches with no corresponding remote
 #                                branch on origin
-#   git-prune-local-orphans    — DELETE local-orphan branches AND remove the
+#   _git_prune_local_orphans    — DELETE local-orphan branches AND remove the
 #                                worktrees that hold them. Also picks up branches
 #                                checked out in any secondary worktree (so claude
 #                                worktrees that were pushed to origin still get
@@ -574,7 +574,7 @@ git-merge-pr-clean-scoped() {
 
 # List remote branches on origin that have no open PR (and aren't the default).
 # Excludes origin/HEAD and the default branch.
-git-remote-orphans() {
+_git_remote_orphans() {
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
     echo "Error: not in a git repo" >&2
     return 1
@@ -599,9 +599,9 @@ git-remote-orphans() {
 # Uses `git push origin --delete`. No confirmation — runs immediately.
 #
 # Usage:
-#   git-prune-remote-orphans            — delete
-#   git-prune-remote-orphans --dry-run  — print what would be deleted and exit
-git-prune-remote-orphans() {
+#   _git_prune_remote_orphans            — delete
+#   _git_prune_remote_orphans --dry-run  — print what would be deleted and exit
+_git_prune_remote_orphans() {
   local dry_run=0
   for arg in "$@"; do
     case "$arg" in
@@ -618,7 +618,7 @@ git-prune-remote-orphans() {
   git fetch --prune >/dev/null 2>&1 || true
 
   local branches
-  branches=$(git-remote-orphans)
+  branches=$(_git_remote_orphans)
 
   if [[ -z "$branches" ]]; then
     echo "No remote orphan branches on origin."
@@ -654,7 +654,7 @@ git-prune-remote-orphans() {
 # List local branches that have no corresponding branch on origin.
 # Includes branches that never had upstream AND branches whose upstream was deleted.
 # Excludes origin/HEAD.
-git-local-orphans() {
+_git_local_orphans() {
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
     echo "Error: not in a git repo" >&2
     return 1
@@ -696,12 +696,12 @@ git-prune-orphans() {
   (( dry_run )) && fwd_args+=(--dry-run)
 
   if [[ "$mode_remote" == "all" ]]; then
-    git-prune-remote-orphans "${fwd_args[@]}" || return 1
+    _git_prune_remote_orphans "${fwd_args[@]}" || return 1
   elif [[ "$mode_remote" == "safe" ]]; then
     _git_prune_remote_safe "$dry_run" || return 1
   fi
 
-  git-prune-local-orphans "${fwd_args[@]}"
+  _git_prune_local_orphans "${fwd_args[@]}"
 }
 
 # Safe-mode remote prune (helper for git-prune-orphans -r). Deletes origin/<b>
@@ -720,7 +720,7 @@ _git_prune_remote_safe() {
 
   local local_branches remote_orphans candidates
   local_branches=$(git for-each-ref --format='%(refname:short)' refs/heads | sort -u)
-  remote_orphans=$(git-remote-orphans | sort -u)
+  remote_orphans=$(_git_remote_orphans | sort -u)
   candidates=$(comm -12 <(echo "$local_branches") <(echo "$remote_orphans"))
 
   if [[ -z "$candidates" ]]; then
@@ -755,10 +755,10 @@ _git_prune_remote_safe() {
 }
 
 # Local-only cleanup. Three categories of candidate:
-#   1. Local branches with no corresponding branch on origin (git-local-orphans)
+#   1. Local branches with no corresponding branch on origin (_git_local_orphans)
 #   2. Local branches checked out in a secondary worktree (regardless of remote
 #      state — so claude worktrees that were pushed to origin still get cleaned
-#      locally; the remote branch stays until you run git-prune-remote-orphans)
+#      locally; the remote branch stays until you run _git_prune_remote_orphans)
 #   3. Secondary worktrees with detached HEAD (no branch ref at all — typical of
 #      claude agent worktrees that died mid-flight; invisible to `git branch`
 #      and to remote-branch checks, so categories 1 and 2 miss them)
@@ -771,12 +771,12 @@ _git_prune_remote_safe() {
 # The main worktree's current checkout is treated as a non-worktree case.
 #
 # This function NEVER pushes to origin. If you want to clean up remote branches
-# too, run git-prune-remote-orphans separately.
+# too, run _git_prune_remote_orphans separately.
 #
 # Usage:
-#   git-prune-local-orphans            — delete (no confirmation; runs immediately)
-#   git-prune-local-orphans --dry-run  — print counts (worktree vs non-worktree) and exit
-git-prune-local-orphans() {
+#   _git_prune_local_orphans            — delete (no confirmation; runs immediately)
+#   _git_prune_local_orphans --dry-run  — print counts (worktree vs non-worktree) and exit
+_git_prune_local_orphans() {
   local dry_run=0
   for arg in "$@"; do
     case "$arg" in
@@ -799,7 +799,7 @@ git-prune-local-orphans() {
   main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
 
   local local_orphans secondary_wt_branches detached_wt_paths
-  local_orphans=$(git-local-orphans)
+  local_orphans=$(_git_local_orphans)
   secondary_wt_branches=$(echo "$wt_info" | awk -v main="$main_wt" '
     BEGIN { RS = ""; FS = "\n" }
     {
