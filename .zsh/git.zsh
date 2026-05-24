@@ -286,6 +286,266 @@ git-merge-pr-clean() {
   _post_merge_prune
 }
 
+# Print branches "related to" a specific PR — the PR head branch plus any local
+# branches whose unique commits appear (by patch-id) in the PR head branch's
+# history. Read-only; emits one branch name per line, head branch first.
+#
+# Independence from cherry-pick `-x` markers: discovery is by patch-id, so it
+# catches cherry-picks made without `-x` AND cross-checks `-x`-marked ones.
+#
+# Usage:
+#   git-pr-related-branches <pr-number>
+git-pr-related-branches() {
+  local pr="$1"
+  if [[ -z "$pr" ]]; then
+    echo "Usage: git-pr-related-branches <pr-number>" >&2
+    return 2
+  fi
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: not in a git repo" >&2
+    return 1
+  }
+
+  local session_branch
+  session_branch=$(gh pr view "$pr" --json headRefName -q .headRefName 2>/dev/null) || {
+    echo "Error: PR #$pr not found" >&2
+    return 1
+  }
+  if [[ -z "$session_branch" ]]; then
+    echo "Error: PR #$pr has no head branch" >&2
+    return 1
+  fi
+
+  # If the session branch isn't local (e.g. fork PR), there's nothing to trace.
+  if ! git rev-parse --verify --quiet "refs/heads/$session_branch" >/dev/null; then
+    echo "$session_branch"
+    return 0
+  fi
+
+  local default
+  default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  : "${default:=master}"
+
+  local mb
+  mb=$(git merge-base "$session_branch" "$default" 2>/dev/null)
+  if [[ -z "$mb" ]]; then
+    echo "Error: no merge-base between '$session_branch' and '$default'" >&2
+    return 1
+  fi
+
+  # Patch-ids of commits unique to the session branch vs default.
+  local session_pids
+  session_pids=$(git log -p --no-merges "$mb..$session_branch" 2>/dev/null \
+                 | git patch-id --stable 2>/dev/null \
+                 | awk '{print $1}' | sort -u)
+
+  # No unique commits — emit just the session branch; cleanup still applies.
+  if [[ -z "$session_pids" ]]; then
+    echo "$session_branch"
+    return 0
+  fi
+
+  # For every other local branch, see if any of its unique commits share a
+  # patch-id with a session-branch commit. With <50 branches this is fast.
+  local agents="" branch other_mb branch_pids overlap
+  while IFS= read -r branch; do
+    [[ -z "$branch" ]] && continue
+    [[ "$branch" == "$session_branch" ]] && continue
+    [[ "$branch" == "$default" ]] && continue
+
+    other_mb=$(git merge-base "$branch" "$default" 2>/dev/null)
+    [[ -z "$other_mb" ]] && continue
+
+    branch_pids=$(git log -p --no-merges "$other_mb..$branch" 2>/dev/null \
+                  | git patch-id --stable 2>/dev/null \
+                  | awk '{print $1}' | sort -u)
+    [[ -z "$branch_pids" ]] && continue
+
+    overlap=$(comm -12 <(echo "$session_pids") <(echo "$branch_pids"))
+    if [[ -n "$overlap" ]]; then
+      agents+="$branch"$'\n'
+    fi
+  done < <(git for-each-ref --format='%(refname:short)' refs/heads)
+
+  echo "$session_branch"
+  [[ -n "$agents" ]] && printf '%s' "$agents"
+}
+
+# Merge a specific PR (admin override), then clean up ONLY the branches and
+# worktrees related to that PR — the PR head branch plus any local branches
+# whose commits cherry-picked into it (discovered by patch-id, no `-x`
+# required). Other concurrent sessions' worktrees/branches are left untouched
+# by construction.
+#
+# Designed for the case where multiple Claude sessions share a repo: existing
+# global pruners (git-prune-gone, git-prune-local-orphans) would reap state
+# belonging to OTHER live sessions; this command stays scoped to one PR.
+#
+# Usage:
+#   git-merge-pr-clean-scoped <pr-number>            — merge and clean
+#   git-merge-pr-clean-scoped <pr-number> --dry-run  — print plan; no merge, no delete
+git-merge-pr-clean-scoped() {
+  local dry_run=0 pr=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --dry-run) dry_run=1; shift ;;
+      -*) echo "Error: unknown flag '$1'" >&2; return 2 ;;
+      *)
+        if [[ -n "$pr" ]]; then
+          echo "Error: multiple positional args (already have '$pr')" >&2
+          return 2
+        fi
+        pr="$1"; shift ;;
+    esac
+  done
+
+  if [[ -z "$pr" ]]; then
+    echo "Usage: git-merge-pr-clean-scoped <pr-number> [--dry-run]" >&2
+    return 2
+  fi
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: not in a git repo" >&2
+    return 1
+  }
+
+  local default
+  default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  : "${default:=master}"
+
+  local current
+  current=$(git symbolic-ref --short HEAD 2>/dev/null)
+  if [[ "$current" != "$default" ]]; then
+    echo "Error: must be on default branch '$default' (current: '$current')" >&2
+    return 1
+  fi
+
+  # Validate PR state up front (skipped in dry-run only if PR is closed/merged —
+  # still useful to preview which branches the cleanup would touch).
+  local pr_info pr_state pr_mergeable
+  pr_info=$(gh pr view "$pr" --json state,mergeable -q '.state + " " + .mergeable' 2>/dev/null) || {
+    echo "Error: PR #$pr not found" >&2
+    return 1
+  }
+  read -r pr_state pr_mergeable <<< "$pr_info"
+
+  if (( ! dry_run )); then
+    if [[ "$pr_state" != "OPEN" ]]; then
+      echo "Error: PR #$pr is $pr_state (not OPEN)" >&2
+      return 1
+    fi
+    if [[ "$pr_mergeable" == "CONFLICTING" ]]; then
+      echo "Error: PR #$pr has merge conflicts. Resolve before merging." >&2
+      return 1
+    fi
+    if [[ "$pr_mergeable" == "UNKNOWN" ]]; then
+      echo "Error: PR #$pr mergeability still computing on GitHub. Retry in a few seconds." >&2
+      return 1
+    fi
+  fi
+
+  # Discover related branches BEFORE merging so the session branch's commits
+  # are still distinct from default — post-merge the patch-id trace would be
+  # noisy or empty.
+  local related
+  related=$(git-pr-related-branches "$pr") || return 1
+  if [[ -z "$related" ]]; then
+    echo "Error: no related branches discovered for PR #$pr" >&2
+    return 1
+  fi
+
+  echo "==> Related branches for PR #$pr:"
+  echo "$related" | sed 's/^/  /'
+
+  # Pre-resolve worktree info so dry-run can print accurate paths.
+  local wt_info main_wt
+  wt_info=$(git worktree list --porcelain)
+  main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
+
+  if (( dry_run )); then
+    echo
+    echo "==> Worktrees that would be removed:"
+    local any_wt=0 branch wt_path locked
+    while IFS= read -r branch; do
+      [[ -z "$branch" ]] && continue
+      read -r wt_path locked < <(echo "$wt_info" | awk -v b="refs/heads/$branch" '
+        BEGIN { RS = ""; FS = "\n" }
+        {
+          path = ""; br = ""; lk = 0
+          for (i = 1; i <= NF; i++) {
+            if ($i ~ /^worktree /) path = substr($i, 10)
+            else if ($i ~ /^branch /) br = substr($i, 8)
+            else if ($i ~ /^locked/) lk = 1
+          }
+          if (br == b) { print path, lk; exit }
+        }')
+      if [[ -n "$wt_path" && "$wt_path" != "$main_wt" ]]; then
+        any_wt=1
+        echo "  $branch  ($wt_path)$([[ "$locked" == "1" ]] && echo ' [locked]')"
+      fi
+    done <<< "$related"
+    (( any_wt )) || echo "  (none)"
+    echo
+    echo "Dry run: would merge PR #$pr (state=$pr_state mergeable=$pr_mergeable), then delete the above worktrees + all listed branches."
+    return 0
+  fi
+
+  # Merge.
+  echo
+  echo "==> Merging PR #$pr"
+  gh pr merge "$pr" -s --admin || return 1
+  git pull || return 1
+
+  # Cleanup: for each related branch, remove its worktree (unlocking if needed)
+  # then delete the branch. Failures are logged but don't abort — partial
+  # cleanup is still progress.
+  echo
+  echo "==> Cleaning up related branches and worktrees:"
+  local branch wt_path locked deleted=0 wt_removed=0 failed=0
+  # Refresh worktree info post-merge in case anything shifted.
+  wt_info=$(git worktree list --porcelain)
+  main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
+  while IFS= read -r branch; do
+    [[ -z "$branch" ]] && continue
+    read -r wt_path locked < <(echo "$wt_info" | awk -v b="refs/heads/$branch" '
+      BEGIN { RS = ""; FS = "\n" }
+      {
+        path = ""; br = ""; lk = 0
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ /^worktree /) path = substr($i, 10)
+          else if ($i ~ /^branch /) br = substr($i, 8)
+          else if ($i ~ /^locked/) lk = 1
+        }
+        if (br == b) { print path, lk; exit }
+      }')
+
+    if [[ -n "$wt_path" && "$wt_path" != "$main_wt" ]]; then
+      if [[ "$locked" == "1" ]]; then
+        echo "Unlocking worktree: $wt_path"
+        git worktree unlock "$wt_path" 2>/dev/null || true
+      fi
+      echo "Removing worktree: $wt_path"
+      if git worktree remove --force "$wt_path" 2>/dev/null; then
+        wt_removed=$((wt_removed + 1))
+      else
+        echo "  failed to remove $wt_path" >&2
+        failed=$((failed + 1))
+      fi
+    fi
+
+    echo "Deleting branch: $branch"
+    if git branch -D "$branch" 2>/dev/null; then
+      deleted=$((deleted + 1))
+    else
+      echo "  failed to delete branch $branch" >&2
+      failed=$((failed + 1))
+    fi
+  done <<< "$related"
+
+  echo "==> Removed $wt_removed worktree(s), deleted $deleted branch(es)$( (( failed > 0 )) && echo "; $failed failure(s)" )."
+}
+
 # ─── Orphan pruning ──────────────────────────────────────────────────────────
 #
 # Unified entry point + four primitives. Default: local only (safe in shared
@@ -550,6 +810,17 @@ git-prune-local-orphans() {
       }
       if (br != "" && path != main) print br
     }')
+
+  # Exclude open-PR branches from the secondary-worktree set — a branch held by
+  # an agent worktree while its PR is open/under-review should not be reaped.
+  # Best-effort; if `gh` is unavailable or fails we leave the set as-is.
+  if [[ -n "$secondary_wt_branches" ]]; then
+    local open_pr_branches
+    open_pr_branches=$(gh pr list --state open --json headRefName -q '.[].headRefName' 2>/dev/null | sort -u)
+    if [[ -n "$open_pr_branches" ]]; then
+      secondary_wt_branches=$(comm -23 <(echo "$secondary_wt_branches" | sort -u) <(echo "$open_pr_branches"))
+    fi
+  fi
 
   # Detached-HEAD secondary worktrees — emit "<path>\t<locked>" so we can
   # iterate them without re-parsing later. These have no branch ref, so they
