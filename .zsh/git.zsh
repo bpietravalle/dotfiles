@@ -106,6 +106,42 @@ git-prune-gone() {
   return 0
 }
 
+# Resolve a PR's state + mergeability, polling while GitHub recomputes it.
+# Immediately after a push or PR-open GitHub returns mergeable=UNKNOWN for a few
+# seconds; this retries instead of bailing on that transient state.
+# Tunable via GIT_PR_MERGEABLE_RETRIES (default 5) and GIT_PR_MERGEABLE_DELAY
+# (default 3 seconds between attempts).
+#
+# Usage:   _git_pr_mergeability [<pr-number>]   (empty arg → current branch's PR)
+# Echoes:  "<state> <mergeable>" on stdout (mergeable may still be UNKNOWN if it
+#          never resolved within the retry budget — callers decide what to do).
+# Returns: 0 when gh resolved the PR; 1 when `gh pr view` failed (PR not found).
+_git_pr_mergeability() {
+  local pr="$1"
+  local -a view_args=(--json state,mergeable -q '.state + " " + .mergeable')
+  [[ -n "$pr" ]] && view_args=("$pr" "${view_args[@]}")
+
+  local attempts="${GIT_PR_MERGEABLE_RETRIES:-5}"
+  local delay="${GIT_PR_MERGEABLE_DELAY:-3}"
+  local label="${pr:+#$pr}"; : "${label:=for current branch}"
+  local info state mergeable i
+  for (( i = 1; i <= attempts; i++ )); do
+    info=$(gh pr view "${view_args[@]}" 2>/dev/null) || return 1
+    read -r state mergeable <<< "$info"
+    if [[ "$mergeable" != "UNKNOWN" ]]; then
+      echo "$state $mergeable"
+      return 0
+    fi
+    (( i < attempts )) || break
+    echo "PR $label mergeability still computing on GitHub; retrying in ${delay}s (attempt $i/$attempts)..." >&2
+    sleep "$delay"
+  done
+
+  # Retry budget exhausted, still UNKNOWN — hand it back so the caller errors/skips.
+  echo "$state $mergeable"
+  return 0
+}
+
 # Squash-merge a PR (admin override), sync the default branch, and prune gone
 # branches. Two modes:
 #   git-merge-pr-clean             — merge the PR for the current branch
@@ -177,7 +213,7 @@ git-merge-pr-clean() {
   if [[ -n "$pr_arg" ]]; then
     # PR-number mode: merge by API, then sync local default if we're on it
     local pr_info pr_state pr_mergeable
-    pr_info=$(gh pr view "$pr_arg" --json state,mergeable -q '.state + " " + .mergeable' 2>/dev/null) || {
+    pr_info=$(_git_pr_mergeability "$pr_arg") || {
       echo "Error: PR #$pr_arg not found" >&2
       return 1
     }
@@ -191,7 +227,7 @@ git-merge-pr-clean() {
       return 1
     fi
     if [[ "$pr_mergeable" == "UNKNOWN" ]]; then
-      echo "Error: PR #$pr_arg mergeability still computing on GitHub. Retry in a few seconds." >&2
+      echo "Error: PR #$pr_arg mergeability still computing on GitHub after retries. Try again shortly." >&2
       return 1
     fi
 
@@ -243,7 +279,7 @@ git-merge-pr-clean() {
   fi
 
   local pr_info pr_state pr_mergeable
-  pr_info=$(gh pr view --json state,mergeable -q '.state + " " + .mergeable' 2>/dev/null) || {
+  pr_info=$(_git_pr_mergeability "") || {
     echo "Error: no PR found for '$branch'" >&2
     return 1
   }
@@ -257,7 +293,7 @@ git-merge-pr-clean() {
     return 1
   fi
   if [[ "$pr_mergeable" == "UNKNOWN" ]]; then
-    echo "Error: PR mergeability still computing on GitHub. Retry in a few seconds." >&2
+    echo "Error: PR mergeability still computing on GitHub after retries. Try again shortly." >&2
     return 1
   fi
 
@@ -370,6 +406,7 @@ git-pr-related-branches() {
 
   echo "$session_branch"
   [[ -n "$agents" ]] && printf '%s' "$agents"
+  return 0
 }
 
 # Merge a specific PR (admin override), then clean up ONLY the branches and
@@ -424,7 +461,7 @@ git-merge-pr-clean-scoped() {
   # Validate PR state up front (skipped in dry-run only if PR is closed/merged —
   # still useful to preview which branches the cleanup would touch).
   local pr_info pr_state pr_mergeable
-  pr_info=$(gh pr view "$pr" --json state,mergeable -q '.state + " " + .mergeable' 2>/dev/null) || {
+  pr_info=$(_git_pr_mergeability "$pr") || {
     echo "Error: PR #$pr not found" >&2
     return 1
   }
@@ -440,7 +477,7 @@ git-merge-pr-clean-scoped() {
       return 1
     fi
     if [[ "$pr_mergeable" == "UNKNOWN" ]]; then
-      echo "Error: PR #$pr mergeability still computing on GitHub. Retry in a few seconds." >&2
+      echo "Error: PR #$pr mergeability still computing on GitHub after retries. Try again shortly." >&2
       return 1
     fi
   fi
@@ -1015,7 +1052,7 @@ git-all-prs-merged-clean() {
     local pr pr_info pr_state pr_mergeable
     while IFS= read -r pr; do
       [[ -z "$pr" ]] && continue
-      pr_info=$(gh pr view "$pr" --json state,mergeable -q '.state + " " + .mergeable' 2>/dev/null) || {
+      pr_info=$(_git_pr_mergeability "$pr") || {
         echo "PR #$pr: view failed — skipping" >&2
         skipped=$((skipped + 1))
         continue
@@ -1028,6 +1065,11 @@ git-all-prs-merged-clean() {
       fi
       if [[ "$pr_mergeable" == "CONFLICTING" ]]; then
         echo "PR #$pr: CONFLICTING — skipping"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      if [[ "$pr_mergeable" == "UNKNOWN" ]]; then
+        echo "PR #$pr: mergeability still computing after retries — skipping"
         skipped=$((skipped + 1))
         continue
       fi
