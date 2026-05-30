@@ -142,31 +142,38 @@ _git_pr_mergeability() {
   return 0
 }
 
-# Squash-merge a PR (admin override), sync the default branch, and prune gone
-# branches. Two modes:
-#   git-merge-pr-clean             — merge the PR for the current branch
-#   git-merge-pr-clean <pr-number> — merge a specific PR (caller already on default)
+# Merge a PR — or every open PR — by squash-admin, clean up that PR's related
+# branches + worktrees (patch-id scoped), then optionally sweep global orphans.
+# Single entry point; wraps the scoped merge engine (_git_merge_pr_clean_scoped).
 #
-# Optional cleanup flags (in addition to the always-on git-prune-gone pass):
-#   -l            also run `git-prune-orphans` (local orphans + stale worktrees)
-#   -r            also run `git-prune-orphans -r` (SAFE remote + local)
-#   -R            also run `git-prune-orphans -R` (AGGRESSIVE remote + local) —
-#                 deletes EVERY remote branch with no open PR, regardless of
-#                 whether you have it locally. Affects every engineer.
-#   -lr / -rl     same as -r alone (safe-mode already chains local)
-#   -lR / -Rl     same as -R alone (aggressive already chains local)
-# -r and -R are mutually exclusive. No confirmation — the prune commands run
-# immediately once the merge completes.
+# Modes:
+#   git-merge-pr-clean              — derive the PR from the current branch
+#   git-merge-pr-clean <pr-number>  — merge a specific PR
+#   git-merge-pr-clean --all        — merge every open PR (skips CONFLICTING/UNKNOWN)
 #
-# Branch mode handles secondary worktrees: if invoked from a worktree where
-# the branch is checked out, after merging it cd's to the main worktree to
-# do the checkout/pull/prune (and tries to remove the now-stale worktree).
+# From a feature branch the PR number is captured BEFORE switching to the default
+# branch (afterwards gh would resolve the default branch's non-existent PR). If
+# invoked from a secondary worktree, we cd to the main worktree first — the default
+# branch can't be checked out in two worktrees. The scoped engine then removes each
+# merged PR's related worktrees + branches.
+#
+# Post-merge global orphan sweep (on top of the per-PR scoped cleanup):
+#   -l   also run `git-prune-orphans`    (local orphans + stale worktrees)
+#   -r   also run `git-prune-orphans -r` (SAFE remote + local)
+#   -R   also run `git-prune-orphans -R` (AGGRESSIVE remote + local — affects everyone)
+# -r and -R are mutually exclusive; -l is implied by either.
+#
+#   --dry-run   preview only — no switch, no merge, no delete. Read-only.
+#
+# In --all mode extra args forward to `gh pr list` (e.g. --author=@me, --label foo).
 git-merge-pr-clean() {
-  local prune_local=0 prune_remote_mode="" pr_arg=""
+  local all=0 prune_local=0 prune_remote_mode="" dry_run=0 pr_arg=""
+  local -a extra=() gh_args=()
   while (( $# > 0 )); do
     case "$1" in
-      -l)
-        prune_local=1; shift ;;
+      --all)     all=1; shift ;;
+      --dry-run) dry_run=1; shift ;;
+      -l)        prune_local=1; shift ;;
       -r)
         [[ "$prune_remote_mode" == "all" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
         prune_remote_mode="safe"; shift ;;
@@ -179,147 +186,126 @@ git-merge-pr-clean() {
       -lR|-Rl)
         [[ "$prune_remote_mode" == "safe" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
         prune_local=1; prune_remote_mode="all"; shift ;;
-      -*)
-        echo "Error: unknown flag '$1'" >&2; return 2 ;;
-      *)
-        if [[ -n "$pr_arg" ]]; then
-          echo "Error: multiple positional args (already have '$pr_arg')" >&2
-          return 2
-        fi
-        pr_arg="$1"; shift ;;
+      *)         extra+=("$1"); shift ;;
     esac
   done
 
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "Error: not in a git repo" >&2
-    return 1
-  }
+  # Resolve trailing args: --all → gh pr list filters; else a single PR number.
+  if (( all )); then
+    gh_args=("${extra[@]}")
+  else
+    local a
+    for a in "${extra[@]}"; do
+      [[ "$a" == -* ]] && { echo "Error: unknown flag '$a'" >&2; return 2; }
+      [[ -n "$pr_arg" ]] && { echo "Error: multiple positional args (already have '$pr_arg')" >&2; return 2; }
+      pr_arg="$a"
+    done
+  fi
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "Error: not in a git repo" >&2; return 1; }
 
   local default
   default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
   : "${default:=master}"
 
-  # Helper: invoked at the end of each mode's success path. Remote modes already
-  # chain the local pass via git-prune-orphans, so a bare -l only fires when no
-  # remote mode is set.
-  _post_merge_prune() {
+  # ── Dry run: read-only preview, never switches branches ──────────────────────
+  if (( dry_run )); then
+    if (( all )); then
+      local prs pr
+      prs=$(gh pr list --state open --json number --jq '.[].number' "${gh_args[@]}" 2>/dev/null | sort -n)
+      if [[ -z "$prs" ]]; then
+        echo "No open PRs."
+      else
+        while IFS= read -r pr; do
+          [[ -z "$pr" ]] && continue
+          _git_merge_pr_clean_scoped "$pr" --dry-run
+        done <<< "$prs"
+      fi
+    else
+      local pr="$pr_arg"
+      if [[ -z "$pr" ]]; then
+        pr=$(gh pr view --json number -q .number 2>/dev/null) \
+          || { echo "Error: no PR found for current branch" >&2; return 1; }
+      fi
+      _git_merge_pr_clean_scoped "$pr" --dry-run || return 1
+    fi
     case "$prune_remote_mode" in
-      safe) git-prune-orphans -r ;;
-      all)  git-prune-orphans -R ;;
-      "")   (( prune_local )) && git-prune-orphans ;;
+      safe) git-prune-orphans -r --dry-run ;;
+      all)  git-prune-orphans -R --dry-run ;;
+      "")   (( prune_local )) && git-prune-orphans --dry-run ;;
     esac
-  }
-
-  if [[ -n "$pr_arg" ]]; then
-    # PR-number mode: merge by API, then sync local default if we're on it
-    local pr_info pr_state pr_mergeable
-    pr_info=$(_git_pr_mergeability "$pr_arg") || {
-      echo "Error: PR #$pr_arg not found" >&2
-      return 1
-    }
-    read -r pr_state pr_mergeable <<< "$pr_info"
-    if [[ "$pr_state" != "OPEN" ]]; then
-      echo "Error: PR #$pr_arg is $pr_state (not OPEN)" >&2
-      return 1
-    fi
-    if [[ "$pr_mergeable" == "CONFLICTING" ]]; then
-      echo "Error: PR #$pr_arg has merge conflicts. Resolve before merging." >&2
-      return 1
-    fi
-    if [[ "$pr_mergeable" == "UNKNOWN" ]]; then
-      echo "Error: PR #$pr_arg mergeability still computing on GitHub after retries. Try again shortly." >&2
-      return 1
-    fi
-
-    gh pr merge "$pr_arg" -s --admin || return 1
-
-    local current
-    current=$(git symbolic-ref --short HEAD 2>/dev/null)
-    if [[ "$current" == "$default" ]]; then
-      git pull || return 1
-      git-prune-gone
-    fi
-    _post_merge_prune
     return 0
   fi
 
-  # Branch mode: merge PR for the current branch
+  # ── Live: switch to the default branch (in the main worktree), then merge ────
   local branch
-  branch=$(git symbolic-ref --short HEAD 2>/dev/null) || {
-    echo "Error: detached HEAD" >&2
-    return 1
-  }
+  branch=$(git symbolic-ref --short HEAD 2>/dev/null) || { echo "Error: detached HEAD" >&2; return 1; }
 
-  if [[ "$branch" == "$default" ]]; then
-    echo "Error: on default branch '$default' — pass a PR number or switch to a feature branch" >&2
-    return 1
-  fi
-
-  if ! git diff-index --quiet HEAD -- 2>/dev/null; then
-    echo "Error: uncommitted changes in working tree. Commit or stash first." >&2
-    return 1
-  fi
-
-  if [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
-    echo "Error: untracked files present. Commit, stash, or clean first." >&2
-    return 1
-  fi
-
-  local upstream
-  upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || {
-    echo "Error: branch '$branch' has no upstream. Push first." >&2
-    return 1
-  }
-
-  local ahead
-  ahead=$(git rev-list --count "${upstream}..HEAD" 2>/dev/null || echo 0)
-  if (( ahead > 0 )); then
-    echo "Error: $ahead unpushed commit(s) on '$branch'. Push before merging." >&2
-    return 1
-  fi
-
-  local pr_info pr_state pr_mergeable
-  pr_info=$(_git_pr_mergeability "") || {
-    echo "Error: no PR found for '$branch'" >&2
-    return 1
-  }
-  read -r pr_state pr_mergeable <<< "$pr_info"
-  if [[ "$pr_state" != "OPEN" ]]; then
-    echo "Error: PR is $pr_state (not OPEN)" >&2
-    return 1
-  fi
-  if [[ "$pr_mergeable" == "CONFLICTING" ]]; then
-    echo "Error: PR for '$branch' has merge conflicts. Resolve before merging." >&2
-    return 1
-  fi
-  if [[ "$pr_mergeable" == "UNKNOWN" ]]; then
-    echo "Error: PR mergeability still computing on GitHub after retries. Try again shortly." >&2
-    return 1
-  fi
-
-  # Detect worktree: if we're not in the main worktree, the local checkout
-  # of $default lives there, not here.
-  local current_wt main_wt in_secondary=0
-  current_wt=$(git rev-parse --show-toplevel)
-  main_wt=$(git worktree list --porcelain | awk '/^worktree / {print $2; exit}')
-  [[ "$current_wt" != "$main_wt" ]] && in_secondary=1
-
-  gh pr merge -s --admin || return 1
-
-  if (( in_secondary )); then
-    echo "==> Secondary worktree detected; syncing in main at $main_wt"
-    cd "$main_wt" || return 1
-    if git worktree remove "$current_wt" 2>/dev/null; then
-      echo "Removed worktree: $current_wt"
-    else
-      echo "Note: worktree at $current_wt not removed (likely has untracked/unmerged content); '$branch' won't prune locally until you clean it up." >&2
+  local pr="$pr_arg"
+  if (( ! all )) && [[ -z "$pr" ]]; then
+    # Single mode, no explicit PR: derive it from the current branch first.
+    if [[ "$branch" == "$default" ]]; then
+      echo "Error: on default branch '$default' — pass a PR number or switch to a feature branch" >&2
+      return 1
+    fi
+    pr=$(gh pr view --json number -q .number 2>/dev/null) || pr=""
+    [[ -z "$pr" ]] && { echo "Error: no PR found for '$branch'" >&2; return 1; }
+    local upstream ahead
+    upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)
+    if [[ -n "$upstream" ]]; then
+      ahead=$(git rev-list --count "${upstream}..HEAD" 2>/dev/null || echo 0)
+      (( ahead > 0 )) && { echo "Error: $ahead unpushed commit(s) on '$branch'. Push before merging." >&2; return 1; }
     fi
   fi
 
-  git checkout "$default" || return 1
-  git pull || return 1
-  git-prune-gone
-  _post_merge_prune
+  # Switch to the default branch in the main worktree before invoking the engine.
+  if [[ "$branch" != "$default" ]]; then
+    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+      echo "Error: uncommitted changes on '$branch'; commit or stash first" >&2; return 1
+    fi
+    if [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+      echo "Error: untracked files on '$branch'; commit, stash, or clean first" >&2; return 1
+    fi
+    local current_wt main_wt
+    current_wt=$(git rev-parse --show-toplevel)
+    main_wt=$(git worktree list --porcelain | awk '/^worktree / {print $2; exit}')
+    if [[ "$current_wt" != "$main_wt" ]]; then
+      echo "==> Secondary worktree detected; switching to main at $main_wt"
+      cd "$main_wt" || return 1
+    fi
+    echo "==> Switching to '$default' (was on '$branch')"
+    git checkout "$default" || return 1
+  fi
+
+  if (( all )); then
+    local prs merged=0 skipped=0 p
+    prs=$(gh pr list --state open --json number --jq '.[].number' "${gh_args[@]}" 2>/dev/null | sort -n) \
+      || { echo "Error: gh pr list failed" >&2; return 1; }
+    if [[ -z "$prs" ]]; then
+      echo "Error: no open PRs to merge." >&2
+      return 1
+    fi
+    while IFS= read -r p; do
+      [[ -z "$p" ]] && continue
+      echo "==> PR #$p"
+      if _git_merge_pr_clean_scoped "$p"; then
+        merged=$((merged + 1))
+      else
+        echo "PR #$p: scoped merge/cleanup failed — skipping" >&2
+        skipped=$((skipped + 1))
+      fi
+    done <<< "$prs"
+    echo "==> Merged $merged PR(s)$( (( skipped > 0 )) && echo "; $skipped skipped" )."
+  else
+    _git_merge_pr_clean_scoped "$pr" || return 1
+  fi
+
+  # ── Post-merge global orphan sweep ───────────────────────────────────────────
+  case "$prune_remote_mode" in
+    safe) git-prune-orphans -r ;;
+    all)  git-prune-orphans -R ;;
+    "")   (( prune_local )) && git-prune-orphans ;;
+  esac
 }
 
 # Print branches "related to" a specific PR — the PR head branch plus any local
@@ -330,11 +316,11 @@ git-merge-pr-clean() {
 # catches cherry-picks made without `-x` AND cross-checks `-x`-marked ones.
 #
 # Usage:
-#   git-pr-related-branches <pr-number>
-git-pr-related-branches() {
+#   _git_pr_related_branches <pr-number>
+_git_pr_related_branches() {
   local pr="$1"
   if [[ -z "$pr" ]]; then
-    echo "Usage: git-pr-related-branches <pr-number>" >&2
+    echo "Usage: _git_pr_related_branches <pr-number>" >&2
     return 2
   fi
 
@@ -420,9 +406,10 @@ git-pr-related-branches() {
 # belonging to OTHER live sessions; this command stays scoped to one PR.
 #
 # Usage:
-#   git-merge-pr-clean-scoped <pr-number>            — merge and clean
-#   git-merge-pr-clean-scoped <pr-number> --dry-run  — print plan; no merge, no delete
-git-merge-pr-clean-scoped() {
+#   _git_merge_pr_clean_scoped <pr-number>            — merge and clean
+#   _git_merge_pr_clean_scoped <pr-number> --dry-run  — print plan; no merge, no delete
+# Internal engine for git-merge-pr-clean; not a standalone command.
+_git_merge_pr_clean_scoped() {
   local dry_run=0 pr=""
   while (( $# > 0 )); do
     case "$1" in
@@ -438,7 +425,7 @@ git-merge-pr-clean-scoped() {
   done
 
   if [[ -z "$pr" ]]; then
-    echo "Usage: git-merge-pr-clean-scoped <pr-number> [--dry-run]" >&2
+    echo "Usage: _git_merge_pr_clean_scoped <pr-number> [--dry-run]" >&2
     return 2
   fi
 
@@ -451,11 +438,15 @@ git-merge-pr-clean-scoped() {
   default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
   : "${default:=master}"
 
-  local current
-  current=$(git symbolic-ref --short HEAD 2>/dev/null)
-  if [[ "$current" != "$default" ]]; then
-    echo "Error: must be on default branch '$default' (current: '$current')" >&2
-    return 1
+  # The default-branch guard is a merge-safety check; dry-run is read-only and may
+  # run from the feature branch (so the unified entry can preview without switching).
+  if (( ! dry_run )); then
+    local current
+    current=$(git symbolic-ref --short HEAD 2>/dev/null)
+    if [[ "$current" != "$default" ]]; then
+      echo "Error: must be on default branch '$default' (current: '$current')" >&2
+      return 1
+    fi
   fi
 
   # Validate PR state up front (skipped in dry-run only if PR is closed/merged —
@@ -486,7 +477,7 @@ git-merge-pr-clean-scoped() {
   # are still distinct from default — post-merge the patch-id trace would be
   # noisy or empty.
   local related
-  related=$(git-pr-related-branches "$pr") || return 1
+  related=$(_git_pr_related_branches "$pr") || return 1
   if [[ -z "$related" ]]; then
     echo "Error: no related branches discovered for PR #$pr" >&2
     return 1
@@ -984,115 +975,5 @@ _git_prune_local_orphans() {
   echo "==> Deleted $deleted branch(es)$( (( failed > 0 )) && echo "; $failed failed" ); removed $wt_removed detached worktree(s)$( (( wt_failed > 0 )) && echo "; $wt_failed failed" )."
 }
 
-# Merge every open PR in numerical order, then sync and prune. Flow:
-#   1. Switch to default branch if not on it (refuses if uncommitted/untracked changes).
-#   2. List open PRs and merge each with `gh pr merge -s --admin` in numerical order.
-#      Skips PRs that are non-OPEN or CONFLICTING; stops on a hard merge failure.
-#   3. `git pull` to sync the now-merged default.
-#   4. `git-prune-orphans` (with -r / -R passed through).
-#
-# Flags:
-#   -r            pass -r to git-prune-orphans (SAFE remote + local)
-#   -R            pass -R to git-prune-orphans (AGGRESSIVE remote + local)
-#   <other>       passed through to `gh pr list` (e.g. --author=@me, --label foo)
-#
-# Examples:
-#   git-all-prs-merged-clean                       # merge every open PR, then local prune
-#   git-all-prs-merged-clean -r                    # ... then safe remote + local prune
-#   git-all-prs-merged-clean -R --author=@me       # only your PRs; aggressive remote prune
-git-all-prs-merged-clean() {
-  local prune_remote_mode=""
-  local -a gh_args=()
-  for arg in "$@"; do
-    case "$arg" in
-      -r)
-        [[ "$prune_remote_mode" == "all" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
-        prune_remote_mode="safe" ;;
-      -R)
-        [[ "$prune_remote_mode" == "safe" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
-        prune_remote_mode="all" ;;
-      *) gh_args+=("$arg") ;;
-    esac
-  done
-
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "Error: not in a git repo" >&2
-    return 1
-  }
-
-  local default
-  default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
-  : "${default:=master}"
-
-  # 1. Switch to default if not on it
-  local current
-  current=$(git symbolic-ref --short HEAD 2>/dev/null)
-  if [[ "$current" != "$default" ]]; then
-    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
-      echo "Error: uncommitted changes on '$current'; commit or stash first" >&2
-      return 1
-    fi
-    if [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
-      echo "Error: untracked files on '$current'; commit, stash, or clean first" >&2
-      return 1
-    fi
-    echo "==> Switching to '$default' (was on '$current')"
-    git checkout "$default" || return 1
-  fi
-
-  # 2. List open PRs in numerical order, merge each
-  local prs
-  prs=$(gh pr list --state open --json number --jq '.[].number' "${gh_args[@]}" 2>/dev/null | sort -n) || {
-    echo "Error: gh pr list failed" >&2
-    return 1
-  }
-
-  local count=0 skipped=0
-  if [[ -n "$prs" ]]; then
-    local pr pr_info pr_state pr_mergeable
-    while IFS= read -r pr; do
-      [[ -z "$pr" ]] && continue
-      pr_info=$(_git_pr_mergeability "$pr") || {
-        echo "PR #$pr: view failed — skipping" >&2
-        skipped=$((skipped + 1))
-        continue
-      }
-      read -r pr_state pr_mergeable <<< "$pr_info"
-      if [[ "$pr_state" != "OPEN" ]]; then
-        echo "PR #$pr: $pr_state — skipping"
-        skipped=$((skipped + 1))
-        continue
-      fi
-      if [[ "$pr_mergeable" == "CONFLICTING" ]]; then
-        echo "PR #$pr: CONFLICTING — skipping"
-        skipped=$((skipped + 1))
-        continue
-      fi
-      if [[ "$pr_mergeable" == "UNKNOWN" ]]; then
-        echo "PR #$pr: mergeability still computing after retries — skipping"
-        skipped=$((skipped + 1))
-        continue
-      fi
-      echo "==> Merging PR #$pr"
-      if gh pr merge "$pr" -s --admin; then
-        count=$((count + 1))
-      else
-        echo "Failed to merge PR #$pr — stopping (merged $count before failure)" >&2
-        return 1
-      fi
-    done <<< "$prs"
-    echo "==> Merged $count PR(s)$( (( skipped > 0 )) && echo "; $skipped skipped" )."
-  else
-    echo "No open PRs."
-  fi
-
-  # 3. Pull synced default
-  git pull || return 1
-
-  # 4. Prune (with -r / -R passthrough)
-  case "$prune_remote_mode" in
-    safe) git-prune-orphans -r ;;
-    all)  git-prune-orphans -R ;;
-    "")   git-prune-orphans ;;
-  esac
-}
+# Batch-merge every open PR: folded into `git-merge-pr-clean --all` (squash-admin
+# per PR via the scoped engine, then -l/-r/-R orphan sweep). See that function.
