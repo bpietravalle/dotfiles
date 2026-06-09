@@ -39,8 +39,12 @@ export PATH=$BREW:$RBENV_PATH:$CONFIG_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_
 # Misc. EXPORTS #
 # ##############
 
-# Setup terminal, and turn on colors
-export TERM=xterm-256color
+# Setup terminal, and turn on colors.
+# Inside tmux, let tmux set TERM (screen/tmux-256color); forcing xterm-256color
+# here desyncs cursor/line-wrap rendering through the multiplexer. iTerm2 sets it itself.
+if [[ -z "$TMUX" ]]; then
+  export TERM=xterm-256color
+fi
 export CLICOLOR=1
 export LSCOLORS=Gxfxcxdxbxegedabagacad
 
