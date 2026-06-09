@@ -5,7 +5,7 @@
 [ -f $HOME/.travis/travis.sh ] && source $HOME/.travis/travis.sh
 export LDFLAGS="-L/usr/local/opt/lua@5.3/lib"
 export CPPFLAGS="-I/usr/local/opt/lua@5.3/include"
-export PYTHON_BIN=/usr/local/opt/python/libexec/bin # python3 rewrites
+export PYTHON_BIN=/opt/homebrew/opt/python@3.13/libexec/bin # unversioned python3/pip3 -> 3.13
 # export DOCKER_HOST=/Users/brianpietravalle/.docker/run/docker.sock
 export NODE_PATH=$HOME/local/lib/node_modules
 export CONFIG_PATH=$HOME/.config
@@ -20,7 +20,6 @@ export GOPATH=$HOME/go
 export CARGO_PATH=$HOME/.cargo/bin
 export GO_BIN_PATH=$GOPATH/bin
 export FABRIC_BIN_PATH=$HOME/docs/dev/fabric-samples/bin
-export PYTHON3_BIN=/usr/local/opt/python/libexec/bin/python
 export JAVA_HOME=/usr/libexec/java_home
 MYSQL_PATH=/opt/homebrew/opt/mysql-client/bin
 PG_APP_PATH=/Applications/Postgres.app/Contents/Versions/latest/bin
@@ -29,7 +28,7 @@ BREW=/opt/homebrew/bin
 TFENV="$HOME/.tfenv/bin"
 CLAUDE_DIR="$HOME/.claude/local"
 export RVT_DOCS="$HOME/projects/rvt-docs"
-export PATH=$BREW:$RBENV_PATH:$CONFIG_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PYTHON_BIN:$PYTHON3_BIN:$PG_APP_PATH:$DOCKER_PATH:$TFENV:$JAVA_HOME:$CLAUDE_DIR:$MYSQL_PATH:$PATH
+export PATH=$BREW:$RBENV_PATH:$CONFIG_PATH:$HOME_BIN:$NODE_PATH:$USR_BIN:$LOCAL_BIN:$LOCAL_DOT_BIN:$GO_BIN_PATH:$GOLANG_EXE_PATH:$CARGO_PATH:$FABRIC_BIN_PATH:$PYTHON_BIN:$PG_APP_PATH:$DOCKER_PATH:$TFENV:$JAVA_HOME:$CLAUDE_DIR:$MYSQL_PATH:$PATH
 
 # this is for mac
 # export PATH=${PATH}:/Applications/Android\ Studio.app/sdk/platform-tools:/Applications/Android\ Studio.app/sdk/tools
