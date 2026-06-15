@@ -2,6 +2,17 @@
 "VUNDLE CONFIG
 
 set nocompatible
+
+" This Homebrew vim bottle is +python3/dyn built against python@3.14, but we
+" run python@3.13 everywhere. Point the dynamic loader at 3.13 so has('python3')
+" is true. Must precede plugin load (vim-isort etc. check it at startup).
+if has('mac')
+  let s:py313 = '/opt/homebrew/opt/python@3.13/Frameworks/Python.framework/Versions/3.13/Python'
+  if filereadable(s:py313)
+    let &pythonthreedll = s:py313
+  endif
+endif
+
 filetype off
 runtime match
 set rtp+=~/.vim/bundle/Vundle.vim
