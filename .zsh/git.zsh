@@ -149,7 +149,9 @@ _git_pr_mergeability() {
 # Modes:
 #   git-merge-pr-clean              — derive the PR from the current branch
 #   git-merge-pr-clean <pr-number>  — merge a specific PR
-#   git-merge-pr-clean --all        — merge every open PR (skips CONFLICTING/UNKNOWN)
+#   git-merge-pr-clean --all        — merge every open PR (skips CONFLICTING/UNKNOWN);
+#                                     pulls the default branch ONCE after all merges,
+#                                     so post-pull git hooks run once, not per-PR
 #
 # From a feature branch the PR number is captured BEFORE switching to the default
 # branch (afterwards gh would resolve the default branch's non-existent PR). If
@@ -288,7 +290,7 @@ git-merge-pr-clean() {
     while IFS= read -r p; do
       [[ -z "$p" ]] && continue
       echo "==> PR #$p"
-      if _git_merge_pr_clean_scoped "$p"; then
+      if _git_merge_pr_clean_scoped "$p" --no-pull; then
         merged=$((merged + 1))
       else
         echo "PR #$p: scoped merge/cleanup failed — skipping" >&2
@@ -296,6 +298,12 @@ git-merge-pr-clean() {
       fi
     done <<< "$prs"
     echo "==> Merged $merged PR(s)$( (( skipped > 0 )) && echo "; $skipped skipped" )."
+    # Single pull after all merges — repos with post-pull git hooks run them once
+    # instead of once per PR. Skipped if nothing merged (no remote movement).
+    if (( merged > 0 )); then
+      echo "==> Pulling '$default' once after $merged merge(s)"
+      git pull || return 1
+    fi
   else
     _git_merge_pr_clean_scoped "$pr" || return 1
   fi
@@ -410,10 +418,11 @@ _git_pr_related_branches() {
 #   _git_merge_pr_clean_scoped <pr-number> --dry-run  — print plan; no merge, no delete
 # Internal engine for git-merge-pr-clean; not a standalone command.
 _git_merge_pr_clean_scoped() {
-  local dry_run=0 pr=""
+  local dry_run=0 no_pull=0 pr=""
   while (( $# > 0 )); do
     case "$1" in
       --dry-run) dry_run=1; shift ;;
+      --no-pull) no_pull=1; shift ;;
       -*) echo "Error: unknown flag '$1'" >&2; return 2 ;;
       *)
         if [[ -n "$pr" ]]; then
@@ -523,7 +532,12 @@ _git_merge_pr_clean_scoped() {
   echo
   echo "==> Merging PR #$pr"
   gh pr merge "$pr" -s --admin || return 1
-  git pull || return 1
+  # --no-pull defers the pull to a single post-loop pull in --all mode (so repos
+  # with post-pull git hooks run them once, not once per PR). Branch/worktree
+  # cleanup below doesn't depend on the local default being pulled.
+  if (( ! no_pull )); then
+    git pull || return 1
+  fi
 
   # Cleanup: for each related branch, remove its worktree (unlocking if needed)
   # then delete the branch. Failures are logged but don't abort — partial
