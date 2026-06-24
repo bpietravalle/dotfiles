@@ -60,5 +60,9 @@ alias tfa='terraform apply'
 alias claude="~/.local/bin/claude"
 alias pip="pip3"
 alias snowsql="/Applications/SnowSQL.app/Contents/MacOS/snowsql"
+alias gpl="gh pr list"
+alias gpv="gh pr view"
+alias gil="gh issue list"
+alias giv="gh issue view"
 
 # Claude shell management moved to ~/.zsh/claude.zsh
