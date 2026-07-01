@@ -1035,6 +1035,15 @@ _git_prune_local_orphans() {
 #   git-sync -r         — also run the remote prune (no-PR origin branches, 6h-gated)
 #   git-sync --dry-run  — still syncs, then previews the prune without deleting
 #
+# Branch guardrail: git-sync NEVER switches your checkout. On the default branch
+# it fast-forward pulls it directly. On any other branch it pulls the current
+# branch (if it has an upstream) AND fast-forwards local <default> from origin
+# in place, via `git fetch origin <default>:<default>` — no checkout, so an
+# in-flight feature branch is left exactly where it is. The ref update is
+# fast-forward-only (fetch refuses a non-ff or a branch checked out in another
+# worktree); on refusal it warns loud-not-blocking and leaves local <default>
+# untouched.
+#
 # Grace windows: GIT_PRUNE_MIN_AGE (local, default 7200s = 2h) and
 # GIT_PRUNE_REMOTE_MIN_AGE (remote, default 21600s = 6h); see the "Orphan
 # pruning" § header.
@@ -1057,6 +1066,23 @@ git-sync() {
     git pull --ff-only || return 1
   else
     echo "==> No upstream for current branch; skipping pull"
+  fi
+
+  # Branch guardrail: keep local <default> in sync with origin without switching
+  # off the current branch. On <default> the pull above already did it; on any
+  # other branch, fast-forward the local <default> ref in place. `git fetch
+  # origin <default>:<default>` is ff-only (fetch refuses a non-ff update, and
+  # refuses if <default> is checked out in another worktree) — a diverged or
+  # busy local <default> is left untouched with a loud-not-blocking warning.
+  local default_branch current_branch
+  default_branch=$(_git_default_branch)
+  current_branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+  if [[ -n "$current_branch" && "$current_branch" != "$default_branch" ]] \
+     && git show-ref --verify --quiet "refs/heads/$default_branch"; then
+    echo "==> Syncing local $default_branch ← origin/$default_branch (in place, no checkout)"
+    if ! git fetch origin "$default_branch:$default_branch"; then
+      echo "    ⚠️  Could not fast-forward local $default_branch (diverged, or checked out in another worktree); left untouched" >&2
+    fi
   fi
 
   echo "==> Fetching tags"
