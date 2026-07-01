@@ -161,9 +161,9 @@ _git_pr_mergeability() {
 #
 # Post-merge global orphan sweep (on top of the per-PR scoped cleanup):
 #   -l   also run `git-prune-orphans`    (local orphans + stale worktrees)
-#   -r   also run `git-prune-orphans -r` (SAFE remote + local)
-#   -R   also run `git-prune-orphans -R` (AGGRESSIVE remote + local — affects everyone)
-# -r and -R are mutually exclusive; -l is implied by either.
+#   -r   also run `git-prune-orphans -r` (remote no-PR branches, 6h-gated + local)
+#   -R   alias for -r (single remote mode)
+# -l is implied by -r/-R.
 #
 #   --dry-run   preview only — no switch, no merge, no delete. Read-only.
 #
@@ -175,19 +175,9 @@ git-merge-pr-clean() {
     case "$1" in
       --all)     all=1; shift ;;
       --dry-run) dry_run=1; shift ;;
-      -l)        prune_local=1; shift ;;
-      -r)
-        [[ "$prune_remote_mode" == "all" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
-        prune_remote_mode="safe"; shift ;;
-      -R)
-        [[ "$prune_remote_mode" == "safe" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
-        prune_remote_mode="all"; shift ;;
-      -lr|-rl)
-        [[ "$prune_remote_mode" == "all" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
-        prune_local=1; prune_remote_mode="safe"; shift ;;
-      -lR|-Rl)
-        [[ "$prune_remote_mode" == "safe" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
-        prune_local=1; prune_remote_mode="all"; shift ;;
+      -l)              prune_local=1; shift ;;
+      -r|-R)           prune_remote_mode="safe"; shift ;;
+      -lr|-rl|-lR|-Rl) prune_local=1; prune_remote_mode="safe"; shift ;;
       *)         extra+=("$1"); shift ;;
     esac
   done
@@ -232,8 +222,7 @@ git-merge-pr-clean() {
       _git_merge_pr_clean_scoped "$pr" --dry-run || return 1
     fi
     case "$prune_remote_mode" in
-      safe) git-prune-orphans -r --dry-run ;;
-      all)  git-prune-orphans -R --dry-run ;;
+      safe) git-prune-orphans -R --dry-run ;;
       "")   (( prune_local )) && git-prune-orphans --dry-run ;;
     esac
     return 0
@@ -310,8 +299,7 @@ git-merge-pr-clean() {
 
   # ── Post-merge global orphan sweep ───────────────────────────────────────────
   case "$prune_remote_mode" in
-    safe) git-prune-orphans -r ;;
-    all)  git-prune-orphans -R ;;
+    safe) git-prune-orphans -R ;;
     "")   (( prune_local )) && git-prune-orphans ;;
   esac
 }
@@ -590,29 +578,110 @@ _git_merge_pr_clean_scoped() {
 
 # ─── Orphan pruning ──────────────────────────────────────────────────────────
 #
-# Unified entry point + four primitives. Default: local only (safe in shared
-# repos — never touches origin, so other engineers' branches are preserved).
+# Unified entry point + primitives. Default: local only (safe in shared repos —
+# never touches origin, so other engineers' branches are preserved).
+#
+# Deletion policy — LOCAL and REMOTE are independent time gates (no coupling):
+#   1. Captured work is always deletable — a branch whose commits are merged into
+#      the default branch, or whose head branch has a closed/merged PR.
+#   2. A branch/remote with an OPEN PR is PROTECTED (you may still push fixes).
+#   3. LOCAL: an uncaptured branch (no PR, not merged) or a detached worktree is
+#      eligible once its last commit is older than GIT_PRUNE_MIN_AGE seconds
+#      (default 7200 = 2h). Shields active local WIP / live agent worktrees.
+#   4. REMOTE (`-r`): any origin branch with no open PR is eligible once its last
+#      commit is older than GIT_PRUNE_REMOTE_MIN_AGE seconds (default 21600 = 6h).
+#      NOT coupled to local — a remote-only branch is fair game after 6h. The
+#      longer window is the safety margin for the shared remote (an engineer's
+#      untouched-for-6h, PR-less branch is treated as abandoned).
 #
 #   git-prune-orphans          — UNIFIED entry point. Default = local only.
-#                                -r → SAFE remote (only delete origin/<b> where
-#                                     <b> also exists locally) THEN local.
-#                                -R → AGGRESSIVE remote (every remote branch with
-#                                     no open PR, regardless of local) THEN local.
-#                                Remote prune runs FIRST so subsequent local prune
-#                                surfaces branches whose remote was just deleted.
+#                                -r → remote (all no-PR origin branches, 6h-gated)
+#                                     THEN local. Remote-enable is a single flag.
 #   _git_remote_orphans         — LIST remote branches on origin with no open PR
-#   _git_prune_remote_orphans   — DELETE those remote branches (push --delete).
-#                                Aggressive; same as `git-prune-orphans -R` minus
-#                                the chained local prune. Affects everyone.
+#   _git_prune_remote_orphans   — DELETE no-PR, 6h-aged remote branches
 #   _git_local_orphans          — LIST local branches with no corresponding remote
-#                                branch on origin
-#   _git_prune_local_orphans    — DELETE local-orphan branches AND remove the
-#                                worktrees that hold them. Also picks up branches
-#                                checked out in any secondary worktree (so claude
-#                                worktrees that were pushed to origin still get
-#                                cleaned locally). Never touches origin.
+#   _git_prune_local_orphans    — DELETE captured/aged-out local orphans AND the
+#                                worktrees that hold them; protects open-PR and
+#                                within-grace WIP. Never touches origin.
+#   git-sync                    — pull --ff-only + fetch --tags + local prune
 #
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Resolve the repo's default branch (origin/HEAD), falling back to "master".
+_git_default_branch() {
+  local d
+  d=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  echo "${d:-master}"
+}
+
+# The ref against which "captured" (merged) is judged: prefer origin/<default>,
+# else the local <default>. Empty if neither exists.
+_git_capture_ref() {
+  local default="$1"
+  if git rev-parse --verify --quiet "refs/remotes/origin/$default" >/dev/null; then
+    echo "refs/remotes/origin/$default"
+  elif git rev-parse --verify --quiet "refs/heads/$default" >/dev/null; then
+    echo "refs/heads/$default"
+  fi
+}
+
+# Grace window (seconds) before an uncaptured LOCAL branch/worktree is prunable.
+_git_prune_min_age() { echo "${GIT_PRUNE_MIN_AGE:-7200}"; }
+
+# Grace window (seconds) before a no-PR REMOTE branch is prunable — longer than
+# local, since the remote is shared with other engineers (default 21600 = 6h).
+_git_prune_remote_min_age() { echo "${GIT_PRUNE_REMOTE_MIN_AGE:-21600}"; }
+
+# Age in seconds of a ref's last commit (empty on failure).
+_git_ref_age_secs() {
+  local ct
+  ct=$(git log -1 --format=%ct "$1" 2>/dev/null) || return 1
+  [[ -z "$ct" ]] && return 1
+  echo $(( $(date +%s) - ct ))
+}
+
+# Emit "<STATE>\t<headRefName>" for every PR (all states). One gh call; the
+# result is cached by callers and passed to _git_branch_prune_verdict. Empty if
+# gh is unavailable — callers then treat every branch as PR-less (age-gated),
+# which errs toward protecting young work rather than deleting it.
+_git_pr_branch_states() {
+  gh pr list --state all --limit 500 --json state,headRefName \
+    -q '.[] | .state + "\t" + .headRefName' 2>/dev/null
+}
+
+# Classify a local branch for pruning. Echoes exactly one verdict:
+#   deletable-captured — merged into default, or head branch has a closed/merged PR
+#   protect-open       — head branch has an OPEN PR (keep)
+#   deletable-old      — uncaptured, last commit past the grace window
+#   protect-young      — uncaptured, last commit within the grace window (keep)
+# Args: <branch> <pr-state-cache> <default-branch>
+_git_branch_prune_verdict() {
+  local branch="$1" pr_cache="$2" default="$3"
+
+  local cap_ref
+  cap_ref=$(_git_capture_ref "$default")
+  if [[ -n "$cap_ref" ]] \
+     && git merge-base --is-ancestor "refs/heads/$branch" "$cap_ref" 2>/dev/null; then
+    printf 'deletable-captured'; return 0
+  fi
+
+  local state
+  state=$(printf '%s\n' "$pr_cache" | awk -F'\t' -v b="$branch" '$2 == b {print $1; exit}')
+  if [[ -n "$state" ]]; then
+    [[ "$state" == "OPEN" ]] && { printf 'protect-open'; return 0; }
+    printf 'deletable-captured'; return 0
+  fi
+
+  local age min
+  age=$(_git_ref_age_secs "refs/heads/$branch")
+  min=$(_git_prune_min_age)
+  if [[ -z "$age" ]] || (( age >= min )); then
+    printf 'deletable-old'
+  else
+    printf 'protect-young'
+  fi
+  return 0
+}
 
 # List remote branches on origin that have no open PR (and aren't the default).
 # Excludes origin/HEAD and the default branch.
@@ -637,62 +706,6 @@ _git_remote_orphans() {
   comm -23 <(echo "$remote_branches") <(echo "$pr_branches")
 }
 
-# Delete remote branches on origin that have no open PR (and aren't the default).
-# Uses `git push origin --delete`. No confirmation — runs immediately.
-#
-# Usage:
-#   _git_prune_remote_orphans            — delete
-#   _git_prune_remote_orphans --dry-run  — print what would be deleted and exit
-_git_prune_remote_orphans() {
-  local dry_run=0
-  for arg in "$@"; do
-    case "$arg" in
-      --dry-run) dry_run=1 ;;
-      *) echo "Unknown arg: $arg" >&2; return 2 ;;
-    esac
-  done
-
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "Error: not in a git repo" >&2
-    return 1
-  }
-
-  git fetch --prune >/dev/null 2>&1 || true
-
-  local branches
-  branches=$(_git_remote_orphans)
-
-  if [[ -z "$branches" ]]; then
-    echo "No remote orphan branches on origin."
-    return 0
-  fi
-
-  local count
-  count=$(echo "$branches" | wc -l | tr -d ' ')
-
-  if (( dry_run )); then
-    echo "Dry run: would delete $count remote branch(es) on origin:"
-    echo "$branches" | sed 's/^/  /'
-    return 0
-  fi
-
-  echo "Deleting $count remote branch(es) on origin (no open PR):"
-
-  local deleted=0 failed=0
-  while IFS= read -r branch; do
-    [[ -z "$branch" ]] && continue
-    echo "Deleting origin/$branch"
-    if git push origin --delete "$branch" 2>/dev/null; then
-      deleted=$((deleted + 1))
-    else
-      echo "  failed to delete origin/$branch" >&2
-      failed=$((failed + 1))
-    fi
-  done <<< "$branches"
-
-  echo "==> Deleted $deleted remote branch(es)$( (( failed > 0 )) && echo "; $failed failed" )."
-}
-
 # List local branches that have no corresponding branch on origin.
 # Includes branches that never had upstream AND branches whose upstream was deleted.
 # Excludes origin/HEAD.
@@ -712,23 +725,17 @@ _git_local_orphans() {
 #
 # Usage:
 #   git-prune-orphans                  — local only (default; safe in shared repos)
-#   git-prune-orphans -r               — SAFE remote (locally-present ∩ orphan), then local
-#   git-prune-orphans -R               — AGGRESSIVE remote (all orphans), then local
-#   git-prune-orphans --dry-run        — works with any mode
+#   git-prune-orphans -r               — remote (all no-PR origin branches, 6h-gated), then local
+#   git-prune-orphans --dry-run        — works with either mode
 #
-# No confirmation prompts — runs immediately. -r and -R are mutually exclusive.
-# Remote prune always runs before local prune so the local pass surfaces branches
-# whose remote was just deleted.
+# `-r` enables remote cleanup; `-R`/`--remote` are accepted aliases (there is a
+# single remote mode now). No confirmation prompts. Remote prune runs before
+# local so the local pass surfaces branches whose remote was just deleted.
 git-prune-orphans() {
-  local mode_remote="" dry_run=0
+  local do_remote=0 dry_run=0
   for arg in "$@"; do
     case "$arg" in
-      -r)
-        [[ -n "$mode_remote" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
-        mode_remote="safe" ;;
-      -R|--all-remote)
-        [[ -n "$mode_remote" ]] && { echo "Error: -r and -R are mutually exclusive" >&2; return 2; }
-        mode_remote="all" ;;
+      -r|-R|--remote|--all-remote) do_remote=1 ;;
       --dry-run) dry_run=1 ;;
       *) echo "Unknown arg: $arg" >&2; return 2 ;;
     esac
@@ -737,20 +744,18 @@ git-prune-orphans() {
   local fwd_args=()
   (( dry_run )) && fwd_args+=(--dry-run)
 
-  if [[ "$mode_remote" == "all" ]]; then
-    _git_prune_remote_orphans "${fwd_args[@]}" || return 1
-  elif [[ "$mode_remote" == "safe" ]]; then
-    _git_prune_remote_safe "$dry_run" || return 1
-  fi
+  (( do_remote )) && { _git_prune_remote_orphans "$dry_run" || return 1; }
 
   _git_prune_local_orphans "${fwd_args[@]}"
 }
 
-# Safe-mode remote prune (helper for git-prune-orphans -r). Deletes origin/<b>
-# only when <b> also exists in the local branch list AND is in the remote-orphan
-# set (no open PR). Snapshot is taken before any mutation, so branches that
-# exist ONLY on origin (other engineers' work) are never touched.
-_git_prune_remote_safe() {
+# Remote prune (helper for git-prune-orphans -r). Deletes origin/<b> when BOTH:
+#   - <b> has no open PR (a remote orphan, per _git_remote_orphans)
+#   - origin/<b>'s last commit is older than GIT_PRUNE_REMOTE_MIN_AGE (default 6h)
+# NOT coupled to local branches — a remote-only branch is fair game once past the
+# 6h window. Unknown remote age → held back (fail-safe: never delete shared state
+# we can't date). Snapshot is taken before any mutation.
+_git_prune_remote_orphans() {
   local dry_run="$1"
 
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
@@ -760,26 +765,45 @@ _git_prune_remote_safe() {
 
   git fetch --prune >/dev/null 2>&1 || true
 
-  local local_branches remote_orphans candidates
-  local_branches=$(git for-each-ref --format='%(refname:short)' refs/heads | sort -u)
-  remote_orphans=$(_git_remote_orphans | sort -u)
-  candidates=$(comm -12 <(echo "$local_branches") <(echo "$remote_orphans"))
+  local min candidates
+  min=$(_git_prune_remote_min_age)
+  candidates=$(_git_remote_orphans | sort -u)
 
   if [[ -z "$candidates" ]]; then
-    echo "No safe remote-orphan candidates (no local branches intersect the remote-orphan set)."
+    echo "No remote-orphan candidates (every origin branch has an open PR)."
+    return 0
+  fi
+
+  # Age-gate each candidate on its remote ref's last commit.
+  local eligible="" held="" branch age
+  while IFS= read -r branch; do
+    [[ -z "$branch" ]] && continue
+    age=$(_git_ref_age_secs "refs/remotes/origin/$branch")
+    if [[ -n "$age" ]] && (( age >= min )); then
+      eligible+="$branch"$'\n'
+    else
+      held+="  origin/$branch  ($( [[ -n "$age" ]] && echo "$((age / 60))m < $((min / 60))m grace" || echo "age unknown" ))"$'\n'
+    fi
+  done <<< "$candidates"
+
+  [[ -n "$held" ]] && { echo "Held back (within grace window):"; printf '%s' "$held"; }
+
+  eligible=$(printf '%s' "$eligible" | awk 'NF')
+  if [[ -z "$eligible" ]]; then
+    echo "No remote branches past the grace window."
     return 0
   fi
 
   local count
-  count=$(echo "$candidates" | wc -l | tr -d ' ')
+  count=$(printf '%s\n' "$eligible" | wc -l | tr -d ' ')
 
   if (( dry_run )); then
-    echo "Dry run: would delete $count remote branch(es) on origin (safe mode — locally present):"
-    echo "$candidates" | sed 's/^/  /'
+    echo "Dry run: would delete $count remote branch(es) on origin (no open PR, past ${min}s grace):"
+    printf '%s\n' "$eligible" | sed 's/^/  /'
     return 0
   fi
 
-  echo "Deleting $count remote branch(es) on origin (safe mode — locally present, no open PR):"
+  echo "Deleting $count remote branch(es) on origin (no open PR, past ${min}s grace):"
 
   local deleted=0 failed=0
   while IFS= read -r branch; do
@@ -791,7 +815,7 @@ _git_prune_remote_safe() {
       echo "  failed to delete origin/$branch" >&2
       failed=$((failed + 1))
     fi
-  done <<< "$candidates"
+  done <<< "$eligible"
 
   echo "==> Deleted $deleted remote branch(es)$( (( failed > 0 )) && echo "; $failed failed" )."
 }
@@ -800,24 +824,25 @@ _git_prune_remote_safe() {
 #   1. Local branches with no corresponding branch on origin (_git_local_orphans)
 #   2. Local branches checked out in a secondary worktree (regardless of remote
 #      state — so claude worktrees that were pushed to origin still get cleaned
-#      locally; the remote branch stays until you run _git_prune_remote_orphans)
+#      locally; the remote branch stays until you run the remote prune)
 #   3. Secondary worktrees with detached HEAD (no branch ref at all — typical of
 #      claude agent worktrees that died mid-flight; invisible to `git branch`
 #      and to remote-branch checks, so categories 1 and 2 miss them)
 #
-# For each candidate:
-#   - categories 1 & 2 (branch-keyed): if checked out in a secondary worktree,
-#     unlock if locked, remove the worktree, then delete the branch; otherwise
-#     just delete the branch
-#   - category 3 (path-keyed, no branch): unlock if locked, remove the worktree
+# Each candidate is gated by the deletion policy (see § header):
+#   - branch-keyed (1 & 2): _git_branch_prune_verdict decides. Captured (merged
+#     or closed/merged PR) → delete; OPEN PR → protect; uncaptured → delete only
+#     past the grace window, else protect. On delete, remove its worktree first.
+#   - detached worktrees (3): age-gated on the worktree HEAD — removed only past
+#     the grace window (protects a live agent worktree that just died).
 # The main worktree's current checkout is treated as a non-worktree case.
 #
-# This function NEVER pushes to origin. If you want to clean up remote branches
-# too, run _git_prune_remote_orphans separately.
+# This function NEVER pushes to origin. For remote cleanup use `git-prune-orphans
+# -r` (no-PR origin branches, 6h-gated).
 #
 # Usage:
 #   _git_prune_local_orphans            — delete (no confirmation; runs immediately)
-#   _git_prune_local_orphans --dry-run  — print counts (worktree vs non-worktree) and exit
+#   _git_prune_local_orphans --dry-run  — print the plan (delete vs protected) and exit
 _git_prune_local_orphans() {
   local dry_run=0
   for arg in "$@"; do
@@ -834,13 +859,18 @@ _git_prune_local_orphans() {
 
   git fetch --prune >/dev/null 2>&1 || true
 
+  local default pr_cache min
+  default=$(_git_default_branch)
+  pr_cache=$(_git_pr_branch_states)
+  min=$(_git_prune_min_age)
+
   # Candidates: union of (local branches with no remote) and (branches checked
   # out in any secondary worktree, even if they have a remote tracker).
   local wt_info main_wt
   wt_info=$(git worktree list --porcelain)
   main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
 
-  local local_orphans secondary_wt_branches detached_wt_paths
+  local local_orphans secondary_wt_branches detached_wt
   local_orphans=$(_git_local_orphans)
   secondary_wt_branches=$(echo "$wt_info" | awk -v main="$main_wt" '
     BEGIN { RS = ""; FS = "\n" }
@@ -853,37 +883,27 @@ _git_prune_local_orphans() {
       if (br != "" && path != main) print br
     }')
 
-  # Exclude open-PR branches from the secondary-worktree set — a branch held by
-  # an agent worktree while its PR is open/under-review should not be reaped.
-  # Best-effort; if `gh` is unavailable or fails we leave the set as-is.
-  if [[ -n "$secondary_wt_branches" ]]; then
-    local open_pr_branches
-    open_pr_branches=$(gh pr list --state open --json headRefName -q '.[].headRefName' 2>/dev/null | sort -u)
-    if [[ -n "$open_pr_branches" ]]; then
-      secondary_wt_branches=$(comm -23 <(echo "$secondary_wt_branches" | sort -u) <(echo "$open_pr_branches"))
-    fi
-  fi
-
-  # Detached-HEAD secondary worktrees — emit "<path>\t<locked>" so we can
-  # iterate them without re-parsing later. These have no branch ref, so they
-  # are invisible to the branch-keyed pass below.
-  detached_wt_paths=$(echo "$wt_info" | awk -v main="$main_wt" '
+  # Detached-HEAD secondary worktrees — emit "<path>\t<locked>\t<head-sha>" so we
+  # can age-gate them. These have no branch ref, so they are invisible to the
+  # branch-keyed pass below.
+  detached_wt=$(echo "$wt_info" | awk -v main="$main_wt" '
     BEGIN { RS = ""; FS = "\n" }
     {
-      path = ""; has_branch = 0; lk = 0
+      path = ""; has_branch = 0; lk = 0; hd = ""
       for (i = 1; i <= NF; i++) {
         if ($i ~ /^worktree /) path = substr($i, 10)
         else if ($i ~ /^branch /) has_branch = 1
+        else if ($i ~ /^HEAD /) hd = substr($i, 6)
         else if ($i ~ /^locked/) lk = 1
       }
-      if (path != "" && path != main && !has_branch) print path "\t" lk
+      if (path != "" && path != main && !has_branch) print path "\t" lk "\t" hd
     }')
 
   local branches
   branches=$(printf '%s\n%s\n' "$local_orphans" "$secondary_wt_branches" \
              | awk 'NF && !seen[$0]++')
 
-  if [[ -z "$branches" && -z "$detached_wt_paths" ]]; then
+  if [[ -z "$branches" && -z "$detached_wt" ]]; then
     echo "No orphan branches or detached worktrees."
     return 0
   fi
@@ -905,48 +925,61 @@ _git_prune_local_orphans() {
       }'
   }
 
-  local wt_count=0 nonwt_count=0 detached_count=0
-  local wt_list="" nonwt_list="" detached_list=""
+  # Classify. del_branches: "<branch>\t<reason>"; protect_list: display lines.
+  local del_branches="" del_detached="" protect_list=""
+  local branch verdict age
   if [[ -n "$branches" ]]; then
     while IFS= read -r branch; do
       [[ -z "$branch" ]] && continue
-      local wt_path locked
-      read -r wt_path locked < <(_git_wt_lookup "$branch")
-      if [[ -n "$wt_path" ]]; then
-        wt_count=$((wt_count + 1))
-        wt_list+="  $branch  ($wt_path)$([[ "$locked" == "1" ]] && echo ' [locked]')"$'\n'
-      else
-        nonwt_count=$((nonwt_count + 1))
-        nonwt_list+="  $branch"$'\n'
-      fi
+      verdict=$(_git_branch_prune_verdict "$branch" "$pr_cache" "$default")
+      case "$verdict" in
+        deletable-captured) del_branches+="$branch"$'\t'"captured"$'\n' ;;
+        deletable-old)      del_branches+="$branch"$'\t'"uncaptured, past grace"$'\n' ;;
+        protect-open)       protect_list+="  $branch  (open PR)"$'\n' ;;
+        protect-young)
+          age=$(_git_ref_age_secs "refs/heads/$branch")
+          protect_list+="  $branch  (unpushed WIP, $((age / 60))m < $((min / 60))m grace)"$'\n' ;;
+      esac
     done <<< "$branches"
   fi
 
-  if [[ -n "$detached_wt_paths" ]]; then
-    while IFS=$'\t' read -r wt_path locked; do
-      [[ -z "$wt_path" ]] && continue
-      detached_count=$((detached_count + 1))
-      detached_list+="  $wt_path$([[ "$locked" == "1" ]] && echo ' [locked]')"$'\n'
-    done <<< "$detached_wt_paths"
+  if [[ -n "$detached_wt" ]]; then
+    local dpath dlk dhead dage
+    while IFS=$'\t' read -r dpath dlk dhead; do
+      [[ -z "$dpath" ]] && continue
+      dage=$(_git_ref_age_secs "$dhead")
+      if [[ -z "$dage" ]] || (( dage >= min )); then
+        del_detached+="$dpath"$'\t'"$dlk"$'\n'
+      else
+        protect_list+="  $dpath  (detached worktree, $((dage / 60))m < $((min / 60))m grace)"$'\n'
+      fi
+    done <<< "$detached_wt"
   fi
 
-  if (( dry_run )); then
-    echo "Dry run: would delete $wt_count worktree branch(es), $nonwt_count non-worktree branch(es), $detached_count detached worktree(s)."
-    [[ -n "$wt_list" ]]       && { echo "Worktree branches:";    printf '%s' "$wt_list"; }
-    [[ -n "$nonwt_list" ]]    && { echo "Non-worktree branches:"; printf '%s' "$nonwt_list"; }
-    [[ -n "$detached_list" ]] && { echo "Detached worktrees:";   printf '%s' "$detached_list"; }
+  if [[ -n "$protect_list" ]]; then
+    echo "Protected (kept):"
+    printf '%s' "$protect_list"
+  fi
+
+  if [[ -z "$del_branches" && -z "$del_detached" ]]; then
+    echo "Nothing eligible to delete."
     unset -f _git_wt_lookup
     return 0
   fi
 
-  echo "Deleting $wt_count worktree branch(es), $nonwt_count non-worktree branch(es), and $detached_count detached worktree(s):"
-  [[ -n "$wt_list" ]]       && { echo "Worktree branches:";    printf '%s' "$wt_list"; }
-  [[ -n "$nonwt_list" ]]    && { echo "Non-worktree branches:"; printf '%s' "$nonwt_list"; }
-  [[ -n "$detached_list" ]] && { echo "Detached worktrees:";   printf '%s' "$detached_list"; }
+  if (( dry_run )); then
+    echo "Dry run: would delete:"
+    [[ -n "$del_branches" ]] && printf '%s' "$del_branches" \
+      | awk -F'\t' 'NF { print "  branch " $1 "  (" $2 ")" }'
+    [[ -n "$del_detached" ]] && printf '%s' "$del_detached" \
+      | awk -F'\t' 'NF { print "  detached worktree " $1 }'
+    unset -f _git_wt_lookup
+    return 0
+  fi
 
-  local deleted=0 failed=0 wt_removed=0 wt_failed=0
-  if [[ -n "$branches" ]]; then
-    while IFS= read -r branch; do
+  local deleted=0 failed=0 wt_removed=0 wt_failed=0 reason
+  if [[ -n "$del_branches" ]]; then
+    while IFS=$'\t' read -r branch reason; do
       [[ -z "$branch" ]] && continue
       local wt_path locked
       read -r wt_path locked < <(_git_wt_lookup "$branch")
@@ -958,31 +991,32 @@ _git_prune_local_orphans() {
         echo "Removing worktree: $wt_path"
         git worktree remove --force "$wt_path" || true
       fi
-      echo "Deleting branch: $branch"
+      echo "Deleting branch: $branch ($reason)"
       if git branch -D "$branch" 2>/dev/null; then
         deleted=$((deleted + 1))
       else
         echo "  failed (likely current branch in some worktree)" >&2
         failed=$((failed + 1))
       fi
-    done <<< "$branches"
+    done <<< "$del_branches"
   fi
 
-  if [[ -n "$detached_wt_paths" ]]; then
-    while IFS=$'\t' read -r wt_path locked; do
-      [[ -z "$wt_path" ]] && continue
-      if [[ "$locked" == "1" ]]; then
-        echo "Unlocking worktree: $wt_path"
-        git worktree unlock "$wt_path" || true
+  if [[ -n "$del_detached" ]]; then
+    local dpath dlk
+    while IFS=$'\t' read -r dpath dlk; do
+      [[ -z "$dpath" ]] && continue
+      if [[ "$dlk" == "1" ]]; then
+        echo "Unlocking worktree: $dpath"
+        git worktree unlock "$dpath" || true
       fi
-      echo "Removing detached worktree: $wt_path"
-      if git worktree remove --force "$wt_path" 2>/dev/null; then
+      echo "Removing detached worktree: $dpath"
+      if git worktree remove --force "$dpath" 2>/dev/null; then
         wt_removed=$((wt_removed + 1))
       else
-        echo "  failed to remove $wt_path" >&2
+        echo "  failed to remove $dpath" >&2
         wt_failed=$((wt_failed + 1))
       fi
-    done <<< "$detached_wt_paths"
+    done <<< "$del_detached"
   fi
 
   unset -f _git_wt_lookup
@@ -991,3 +1025,46 @@ _git_prune_local_orphans() {
 
 # Batch-merge every open PR: folded into `git-merge-pr-clean --all` (squash-admin
 # per PR via the scoped engine, then -l/-r/-R orphan sweep). See that function.
+
+# One-shot repo sync + cleanup — the daily-driver combo. Fast-forward pulls the
+# current branch, refreshes tags, then prunes captured/aged-out local orphans.
+# Safe in shared repos: the default never deletes anything on origin.
+# Aliased to `gsp` (see aliases.zsh) so it's a 3-keystroke, tab-free invocation.
+#
+#   git-sync            — pull --ff-only (if upstream) + fetch --tags --prune + local prune
+#   git-sync -r         — also run the remote prune (no-PR origin branches, 6h-gated)
+#   git-sync --dry-run  — still syncs, then previews the prune without deleting
+#
+# Grace windows: GIT_PRUNE_MIN_AGE (local, default 7200s = 2h) and
+# GIT_PRUNE_REMOTE_MIN_AGE (remote, default 21600s = 6h); see the "Orphan
+# pruning" § header.
+git-sync() {
+  local dry_run=0 remote=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --dry-run)               dry_run=1 ;;
+      -r|-R|--remote)          remote=1 ;;
+      *) echo "Unknown arg: $arg" >&2; return 2 ;;
+    esac
+  done
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "Error: not in a git repo" >&2; return 1; }
+
+  local upstream
+  upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)
+  if [[ -n "$upstream" ]]; then
+    echo "==> Fast-forward pull ($upstream)"
+    git pull --ff-only || return 1
+  else
+    echo "==> No upstream for current branch; skipping pull"
+  fi
+
+  echo "==> Fetching tags"
+  git fetch --tags --prune || true
+
+  local -a prune_args=()
+  (( remote ))  && prune_args+=(-r)
+  (( dry_run )) && prune_args+=(--dry-run)
+  echo "==> Pruning orphans"
+  git-prune-orphans "${prune_args[@]}"
+}
