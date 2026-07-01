@@ -64,5 +64,7 @@ alias gpl="gh pr list"
 alias gpv="gh pr view"
 alias gil="gh issue list"
 alias giv="gh issue view"
+alias grl="gh run list"
+alias grv="gh run view"
 
 # Claude shell management moved to ~/.zsh/claude.zsh
