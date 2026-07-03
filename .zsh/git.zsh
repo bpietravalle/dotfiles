@@ -770,16 +770,24 @@ _git_local_orphans() {
 # Usage:
 #   git-prune-orphans                  — local only (default; safe in shared repos)
 #   git-prune-orphans -r               — remote (all no-PR origin branches, 6h-gated), then local
-#   git-prune-orphans --dry-run        — works with either mode
+#   git-prune-orphans -f               — force LOCAL prune: also delete branches with an
+#                                        open PR or still within the grace window
+#   git-prune-orphans --dry-run        — works with any mode
 #
 # `-r` enables remote cleanup; `-R`/`--remote` are accepted aliases (there is a
 # single remote mode now). No confirmation prompts. Remote prune runs before
 # local so the local pass surfaces branches whose remote was just deleted.
+#
+# `-f`/`--force` overrides the open-PR and grace-window holds for the LOCAL prune
+# only (so you can reap a branch whose PR is already up). It still refuses to
+# force-remove a worktree with uncommitted work or an explicit lock — force is
+# not a licence to discard live work. Remote deletion stays PR-/age-gated.
 git-prune-orphans() {
-  local do_remote=0 dry_run=0
+  local do_remote=0 dry_run=0 force=0
   for arg in "$@"; do
     case "$arg" in
       -r|-R|--remote|--all-remote) do_remote=1 ;;
+      -f|--force) force=1 ;;
       --dry-run) dry_run=1 ;;
       *) echo "Unknown arg: $arg" >&2; return 2 ;;
     esac
@@ -787,6 +795,7 @@ git-prune-orphans() {
 
   local fwd_args=()
   (( dry_run )) && fwd_args+=(--dry-run)
+  (( force ))   && fwd_args+=(--force)
 
   (( do_remote )) && { _git_prune_remote_orphans "$dry_run" || return 1; }
 
@@ -887,11 +896,14 @@ _git_prune_remote_orphans() {
 # Usage:
 #   _git_prune_local_orphans            — delete (no confirmation; runs immediately)
 #   _git_prune_local_orphans --dry-run  — print the plan (delete vs protected) and exit
+#   _git_prune_local_orphans --force    — also reap open-PR / within-grace branches
+#                                         (still protects dirty/locked worktrees)
 _git_prune_local_orphans() {
-  local dry_run=0
+  local dry_run=0 _force=0
   for arg in "$@"; do
     case "$arg" in
-      --dry-run) dry_run=1 ;;
+      --dry-run)  dry_run=1 ;;
+      --force|-f) _force=1 ;;
       *) echo "Unknown arg: $arg" >&2; return 2 ;;
     esac
   done
@@ -978,14 +990,24 @@ _git_prune_local_orphans() {
     while IFS= read -r branch; do
       [[ -z "$branch" ]] && continue
       verdict=$(_git_branch_prune_verdict "$branch" "$pr_cache" "$default")
+      # --force overrides the PR-open and grace-window holds (but never the
+      # dirty/locked worktree guard below).
+      if (( _force )); then
+        case "$verdict" in
+          protect-open)  verdict=deletable-captured ;;
+          protect-young) verdict=deletable-old ;;
+        esac
+      fi
       case "$verdict" in
         deletable-captured|deletable-old)
           # Live-worktree guard: never reap a branch checked out in an active
           # secondary worktree (locked / dirty / young HEAD) — even when its PR
           # merged (captured, which otherwise skips the grace window). This is
-          # the fix for concurrent git-sync wiping a still-running agent.
+          # the fix for concurrent git-sync wiping a still-running agent. Under
+          # --force the young-HEAD hold is dropped (check_age=0), but dirty and
+          # locked worktrees stay protected — force never discards live work.
           read -r _wt _lk < <(_git_wt_lookup "$branch")
-          if [[ -n "$_wt" ]] && _git_worktree_is_live "$_wt" "$_lk"; then
+          if [[ -n "$_wt" ]] && _git_worktree_is_live "$_wt" "$_lk" $(( _force ? 0 : 1 )); then
             protect_list+="  $branch  (live worktree: $_wt)"$'\n'
           elif [[ "$verdict" == "deletable-captured" ]]; then
             del_branches+="$branch"$'\t'"captured"$'\n'
@@ -1005,14 +1027,14 @@ _git_prune_local_orphans() {
     local dpath dlk dhead dage
     while IFS=$'\t' read -r dpath dlk dhead; do
       [[ -z "$dpath" ]] && continue
-      # Dirty/locked detached worktree → live agent; protect (age gate below
-      # still guards young-but-clean ones).
+      # Dirty/locked detached worktree → live agent; protect regardless of force
+      # (age gate below guards young-but-clean ones; --force overrides that gate).
       if _git_worktree_is_live "$dpath" "$dlk" 0; then
         protect_list+="  $dpath  (live detached worktree: dirty or locked)"$'\n'
         continue
       fi
       dage=$(_git_ref_age_secs "$dhead")
-      if [[ -z "$dage" ]] || (( dage >= min )); then
+      if (( _force )) || [[ -z "$dage" ]] || (( dage >= min )); then
         del_detached+="$dpath"$'\t'"$dlk"$'\n'
       else
         protect_list+="  $dpath  (detached worktree, $((dage / 60))m < $((min / 60))m grace)"$'\n'
@@ -1098,17 +1120,20 @@ _git_prune_local_orphans() {
 #
 #   git-sync            — pull --ff-only (if upstream) + fetch --tags --prune + local prune
 #   git-sync -r         — also run the remote prune (no-PR origin branches, 6h-gated)
+#   git-sync -f         — force the local prune: reap branches with an open PR or
+#                         still within grace (dirty/locked worktrees stay protected)
 #   git-sync --dry-run  — still syncs, then previews the prune without deleting
 #
 # Grace windows: GIT_PRUNE_MIN_AGE (local, default 7200s = 2h) and
 # GIT_PRUNE_REMOTE_MIN_AGE (remote, default 21600s = 6h); see the "Orphan
 # pruning" § header.
 git-sync() {
-  local dry_run=0 remote=0 arg
+  local dry_run=0 remote=0 force=0 arg
   for arg in "$@"; do
     case "$arg" in
       --dry-run)               dry_run=1 ;;
       -r|-R|--remote)          remote=1 ;;
+      -f|--force)              force=1 ;;
       *) echo "Unknown arg: $arg" >&2; return 2 ;;
     esac
   done
@@ -1129,6 +1154,7 @@ git-sync() {
 
   local -a prune_args=()
   (( remote ))  && prune_args+=(-r)
+  (( force ))   && prune_args+=(-f)
   (( dry_run )) && prune_args+=(--dry-run)
   echo "==> Pruning orphans"
   git-prune-orphans "${prune_args[@]}"
