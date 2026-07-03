@@ -506,8 +506,12 @@ _git_merge_pr_clean_scoped() {
           if (br == b) { print path, lk; exit }
         }')
       if [[ -n "$wt_path" && "$wt_path" != "$main_wt" ]]; then
-        any_wt=1
-        echo "  $branch  ($wt_path)$([[ "$locked" == "1" ]] && echo ' [locked]')"
+        if _git_worktree_is_live "$wt_path" "$locked" 0; then
+          echo "  $branch  ($wt_path) [live — would be SKIPPED: uncommitted work or locked]"
+        else
+          any_wt=1
+          echo "  $branch  ($wt_path)$([[ "$locked" == "1" ]] && echo ' [locked]')"
+        fi
       fi
     done <<< "$related"
     (( any_wt )) || echo "  (none)"
@@ -549,6 +553,16 @@ _git_merge_pr_clean_scoped() {
         }
         if (br == b) { print path, lk; exit }
       }')
+
+    # Live-worktree guard: never force-remove a worktree with uncommitted work
+    # or an explicit lock, even for this PR's own just-merged branch — that would
+    # discard an agent's in-flight edits. Skip the branch delete too (git refuses
+    # to delete a branch checked out in a live worktree anyway).
+    if [[ -n "$wt_path" && "$wt_path" != "$main_wt" ]] \
+       && _git_worktree_is_live "$wt_path" "$locked" 0; then
+      echo "Skipping live worktree + branch (uncommitted work or locked): $branch ($wt_path)" >&2
+      continue
+    fi
 
     if [[ -n "$wt_path" && "$wt_path" != "$main_wt" ]]; then
       if [[ "$locked" == "1" ]]; then
@@ -638,6 +652,36 @@ _git_ref_age_secs() {
   ct=$(git log -1 --format=%ct "$1" 2>/dev/null) || return 1
   [[ -z "$ct" ]] && return 1
   echo $(( $(date +%s) - ct ))
+}
+
+# Return 0 (LIVE — protect) if a secondary worktree looks like an active session
+# whose directory/uncommitted work must NOT be force-removed:
+#   - locked          → the operator/agent explicitly marked it hands-off
+#   - dirty tree      → uncommitted work a force-remove would silently discard
+#   - young HEAD      → last commit within the local grace window (an agent that
+#                       just committed/merged and is likely still live)
+# Return 1 (safe to reap) otherwise. This is the guard that makes the grace
+# window govern *captured* worktrees too — a merged-PR branch checked out in a
+# live worktree is captured (no grace by branch verdict), but must still be
+# protected while the agent is running.
+#
+# Args: <worktree-path> <locked 0|1> [<check_age 0|1>, default 1]
+# check_age=0 skips the young-HEAD test — used by explicit `git-merge-pr-clean`,
+# where a freshly-merged (young) branch is exactly what SHOULD be cleaned up; the
+# lock/dirty protections still apply so uncommitted work is never discarded.
+_git_worktree_is_live() {
+  local wt="$1" locked="$2" check_age="${3:-1}"
+  [[ "$locked" == "1" ]] && return 0
+  [[ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]] && return 0
+  if (( check_age )); then
+    local ct min
+    ct=$(git -C "$wt" log -1 --format=%ct HEAD 2>/dev/null)
+    if [[ -n "$ct" ]]; then
+      min=$(_git_prune_min_age)
+      (( $(date +%s) - ct < min )) && return 0
+    fi
+  fi
+  return 1
 }
 
 # Emit "<STATE>\t<headRefName>" for every PR (all states). One gh call; the
@@ -927,14 +971,28 @@ _git_prune_local_orphans() {
 
   # Classify. del_branches: "<branch>\t<reason>"; protect_list: display lines.
   local del_branches="" del_detached="" protect_list=""
-  local branch verdict age
+  # NB: _wt/_lk declared here, NOT inside the loop — a bare `local x` on an
+  # already-set var re-prints "x=value" in zsh (a display op), leaking to stdout.
+  local branch verdict age _wt _lk
   if [[ -n "$branches" ]]; then
     while IFS= read -r branch; do
       [[ -z "$branch" ]] && continue
       verdict=$(_git_branch_prune_verdict "$branch" "$pr_cache" "$default")
       case "$verdict" in
-        deletable-captured) del_branches+="$branch"$'\t'"captured"$'\n' ;;
-        deletable-old)      del_branches+="$branch"$'\t'"uncaptured, past grace"$'\n' ;;
+        deletable-captured|deletable-old)
+          # Live-worktree guard: never reap a branch checked out in an active
+          # secondary worktree (locked / dirty / young HEAD) — even when its PR
+          # merged (captured, which otherwise skips the grace window). This is
+          # the fix for concurrent git-sync wiping a still-running agent.
+          read -r _wt _lk < <(_git_wt_lookup "$branch")
+          if [[ -n "$_wt" ]] && _git_worktree_is_live "$_wt" "$_lk"; then
+            protect_list+="  $branch  (live worktree: $_wt)"$'\n'
+          elif [[ "$verdict" == "deletable-captured" ]]; then
+            del_branches+="$branch"$'\t'"captured"$'\n'
+          else
+            del_branches+="$branch"$'\t'"uncaptured, past grace"$'\n'
+          fi
+          ;;
         protect-open)       protect_list+="  $branch  (open PR)"$'\n' ;;
         protect-young)
           age=$(_git_ref_age_secs "refs/heads/$branch")
@@ -947,6 +1005,12 @@ _git_prune_local_orphans() {
     local dpath dlk dhead dage
     while IFS=$'\t' read -r dpath dlk dhead; do
       [[ -z "$dpath" ]] && continue
+      # Dirty/locked detached worktree → live agent; protect (age gate below
+      # still guards young-but-clean ones).
+      if _git_worktree_is_live "$dpath" "$dlk" 0; then
+        protect_list+="  $dpath  (live detached worktree: dirty or locked)"$'\n'
+        continue
+      fi
       dage=$(_git_ref_age_secs "$dhead")
       if [[ -z "$dage" ]] || (( dage >= min )); then
         del_detached+="$dpath"$'\t'"$dlk"$'\n'
@@ -977,11 +1041,12 @@ _git_prune_local_orphans() {
     return 0
   fi
 
-  local deleted=0 failed=0 wt_removed=0 wt_failed=0 reason
+  # wt_path/locked hoisted out of the loop — a bare in-loop `local` re-prints
+  # "name=value" to stdout in zsh once the var is set (see classify loop above).
+  local deleted=0 failed=0 wt_removed=0 wt_failed=0 reason wt_path locked
   if [[ -n "$del_branches" ]]; then
     while IFS=$'\t' read -r branch reason; do
       [[ -z "$branch" ]] && continue
-      local wt_path locked
       read -r wt_path locked < <(_git_wt_lookup "$branch")
       if [[ -n "$wt_path" ]]; then
         if [[ "$locked" == "1" ]]; then
