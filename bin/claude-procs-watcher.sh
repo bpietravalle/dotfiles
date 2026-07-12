@@ -85,8 +85,15 @@ get_interval() {
 
 set_config() {
     ensure_dirs
+    # Preserve the reap keys. This function truncates the file, so writing only
+    # threshold+interval would silently wipe any reap_every/reap_min_age the
+    # operator had set every time `watch start procs <threshold>` ran.
+    local reap_every=$(get_reap_every)
+    local reap_min_age=$(get_reap_min_age)
     echo "threshold=${1:-$DEFAULT_THRESHOLD_MB}" > "$CONFIG_FILE"
     echo "interval=${2:-$DEFAULT_INTERVAL}" >> "$CONFIG_FILE"
+    echo "reap_every=${3:-$reap_every}" >> "$CONFIG_FILE"
+    echo "reap_min_age=${4:-$reap_min_age}" >> "$CONFIG_FILE"
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -120,27 +127,34 @@ watcher_loop() {
         # Get total system memory in KB (portable: macOS sysctl / Linux /proc)
         local total_system_mem_kb=$(sys_total_mem_kb)
         
-        # Find vitest processes
+        # Find vitest processes.
+        # vitest_count is tracked explicitly rather than reading ${#vitest_pids[@]}:
+        # under `set -u` on bash 3.2 (macOS system bash) expanding an EMPTY array
+        # raises "unbound variable" and kills the daemon. With no vitest running —
+        # i.e. almost always — that fired on the very first cycle, which is why
+        # this watcher never stayed up and its log was empty.
+        local vitest_count=0
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue
             local pid=$(echo "$line" | awk '{print $1}')
             local mem_pct=$(echo "$line" | awk '{print $4}')
             local cmd=$(echo "$line" | awk '{for(i=5;i<=NF;i++) printf "%s ", $i; print ""}')
-            
+
             # Convert percentage to KB
             local mem_kb=$(echo "$mem_pct $total_system_mem_kb" | awk '{printf "%.0f", $1 * $2 / 100}')
-            
+
             vitest_pids+=("$pid")
             vitest_mems+=("$mem_kb")
             vitest_cmds+=("$cmd")
             total_mem_kb=$((total_mem_kb + mem_kb))
+            vitest_count=$((vitest_count + 1))
         done < <(ps -eo pid,etime,%cpu,%mem,command 2>/dev/null | grep -E 'vitest' | grep -v grep | grep -v 'claude-procs')
-        
+
         local total_mem_mb=$((total_mem_kb / 1024))
-        
-        # Check if threshold exceeded
-        if [[ ${#vitest_pids[@]} -gt 0 && $total_mem_mb -ge $threshold_mb ]]; then
-            log "THRESHOLD EXCEEDED: ${total_mem_mb}MB >= ${threshold_mb}MB (${#vitest_pids[@]} processes)"
+
+        # Check if threshold exceeded (array expansions below are safe: count>0)
+        if [[ $vitest_count -gt 0 && $total_mem_mb -ge $threshold_mb ]]; then
+            log "THRESHOLD EXCEEDED: ${total_mem_mb}MB >= ${threshold_mb}MB (${vitest_count} processes)"
             
             # Kill processes until under threshold
             for i in "${!vitest_pids[@]}"; do
@@ -289,8 +303,9 @@ cmd_logs() {
 }
 
 cmd_config() {
-    local threshold="$1"
-    local interval="$2"
+    # Default-expand: under `set -u` a one-arg `config 2048` died on $2.
+    local threshold="${1:-}"
+    local interval="${2:-}"
     
     if [[ -z "$threshold" && -z "$interval" ]]; then
         echo "Current config:"
