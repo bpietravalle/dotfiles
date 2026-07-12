@@ -18,6 +18,9 @@ CONFIG_FILE="${WATCHER_DIR}/config"
 # Defaults
 DEFAULT_THRESHOLD_MB=1024
 DEFAULT_INTERVAL=30
+# Orphan auto-reap: how often (seconds) and the age gate handed to claude-procs-reap.
+DEFAULT_REAP_EVERY=600
+DEFAULT_REAP_MIN_AGE=30m
 
 # Colors
 C_RESET='\033[0m'
@@ -31,6 +34,32 @@ C_YELLOW='\033[0;33m'
 
 ensure_dirs() {
     mkdir -p "$WATCHER_DIR"
+}
+
+# Total physical memory in KB — portable across macOS (sysctl) and Linux (/proc).
+sys_total_mem_kb() {
+    if [[ -r /proc/meminfo ]]; then
+        awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo
+    else
+        local bytes=$(sysctl -n hw.memsize 2>/dev/null)
+        [[ -n "$bytes" ]] && echo $((bytes / 1024)) || echo 0
+    fi
+}
+
+get_reap_every() {
+    if [[ -f "$CONFIG_FILE" ]] && grep -q '^reap_every=' "$CONFIG_FILE" 2>/dev/null; then
+        grep '^reap_every=' "$CONFIG_FILE" | cut -d= -f2
+    else
+        echo "$DEFAULT_REAP_EVERY"
+    fi
+}
+
+get_reap_min_age() {
+    if [[ -f "$CONFIG_FILE" ]] && grep -q '^reap_min_age=' "$CONFIG_FILE" 2>/dev/null; then
+        grep '^reap_min_age=' "$CONFIG_FILE" | cut -d= -f2
+    else
+        echo "$DEFAULT_REAP_MIN_AGE"
+    fi
 }
 
 log() {
@@ -67,16 +96,29 @@ set_config() {
 watcher_loop() {
     local threshold_mb=$(get_threshold)
     local interval=$(get_interval)
-    
-    log "Watcher started (threshold: ${threshold_mb}MB, interval: ${interval}s)"
-    
+    local reap_every=$(get_reap_every)
+    local reap_min_age=$(get_reap_min_age)
+    local reap_bin=$(command -v claude-procs-reap 2>/dev/null || echo "")
+    local last_reap=0
+
+    log "Watcher started (threshold: ${threshold_mb}MB, interval: ${interval}s, reap: every ${reap_every}s age>=${reap_min_age})"
+
     while true; do
         local total_mem_kb=0
         local -a vitest_pids vitest_mems vitest_cmds
-        
-        # Get total system memory in KB (macOS)
-        local total_system_mem_kb=$(sysctl -n hw.memsize 2>/dev/null)
-        total_system_mem_kb=$((total_system_mem_kb / 1024))
+
+        # Periodic age-gated orphan reap (delegated to the portable engine).
+        if [[ -n "$reap_bin" ]]; then
+            local now=$(date +%s)
+            if (( now - last_reap >= reap_every )); then
+                local out=$("$reap_bin" --quiet --min-age "$reap_min_age" 2>&1)
+                [[ "$out" == *"reaped"* ]] && log "$out"
+                last_reap=$now
+            fi
+        fi
+
+        # Get total system memory in KB (portable: macOS sysctl / Linux /proc)
+        local total_system_mem_kb=$(sys_total_mem_kb)
         
         # Find vitest processes
         while IFS= read -r line; do
@@ -223,9 +265,8 @@ cmd_status() {
     # Show current vitest memory usage
     local total_mem_kb=0
     local count=0
-    local total_system_mem_kb=$(sysctl -n hw.memsize 2>/dev/null)
-    total_system_mem_kb=$((total_system_mem_kb / 1024))
-    
+    local total_system_mem_kb=$(sys_total_mem_kb)
+
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         local mem_pct=$(echo "$line" | awk '{print $4}')

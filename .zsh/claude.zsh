@@ -126,9 +126,9 @@ _claude_watch() {
       
       # Procs watcher
       if [[ -f ~/.claude/procs/watcher.pid ]] && ps -p "$(cat ~/.claude/procs/watcher.pid 2>/dev/null)" &>/dev/null; then
-        printf "%-12s \033[0;32m%-10s\033[0m %s\n" "procs" "RUNNING" "Vitest memory cleanup"
+        printf "%-12s \033[0;32m%-10s\033[0m %s\n" "procs" "RUNNING" "Vitest cleanup + orphan reap"
       else
-        printf "%-12s \033[0;31m%-10s\033[0m %s\n" "procs" "STOPPED" "Vitest memory cleanup"
+        printf "%-12s \033[0;31m%-10s\033[0m %s\n" "procs" "STOPPED" "Vitest cleanup + orphan reap"
       fi
       
       echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -258,7 +258,7 @@ Watchers:
   all      All watchers
   shell    Snapshot monitoring
   monitor  Claude instance monitoring
-  procs    Vitest memory cleanup
+  procs    Vitest cleanup + orphan reap
 
 Monitor Shortcuts:
   -f       Run monitor in foreground
@@ -341,7 +341,7 @@ WATCHER CONTROL
   Watchers:
     shell   - Snapshot monitoring
     monitor - Claude instance monitoring  
-    procs   - Vitest memory cleanup (1GB threshold)
+    procs   - Vitest cleanup + orphan reap (1GB threshold)
 
   Monitor Shortcuts:
     watch -fv           Verbose dashboard (recommended)
@@ -481,6 +481,16 @@ claude-procs() {
     kill)
       _claude_procs_kill "$@"
       ;;
+    reap)
+      # Age-gated orphan reaper (cross-platform). Delegates to the standalone
+      # bin/claude-procs-reap so there is ONE implementation shared with the
+      # auto-reaper daemon. All flags pass through (--min-age, --dry-run, etc.).
+      if command -v claude-procs-reap &>/dev/null; then
+        claude-procs-reap "$@"
+      else
+        "$HOME/dev/dotfiles/bin/claude-procs-reap" "$@"
+      fi
+      ;;
     clean|cleanup)
       _claude_procs_interactive_cleanup
       ;;
@@ -509,7 +519,15 @@ Commands:
   test [opts]    List test runners only
   kill <pid>     Kill specific PID
   kill [opts]    Bulk kill with preview (kills process trees)
+  reap [opts]    Age-gated reap of orphans (no live claude ancestor)
   clean          Interactive cleanup
+
+Reap options:
+  --min-age D    Only orphans older than D (10m default; s/m/h/d or raw secs)
+  --dry-run, -n  Preview only, kill nothing
+  --yes, -y      Skip confirmation
+  --grace N      Seconds between SIGTERM and SIGKILL (default 5)
+  --quiet, -q    Summary line only (implies --yes; for daemons/cron)
 
 Options (list & kill):
   --type, -t T   Filter by type (see below)
@@ -541,8 +559,22 @@ EOF
 
 _claude_procs_get_cwd() {
   local pid="$1"
-  # macOS: use lsof to get current working directory
-  lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | grep '^n' | cut -c2- || echo "unknown"
+  # Linux: /proc/<pid>/cwd symlink (fast). macOS/BSD: lsof fallback.
+  if [[ -r "/proc/$pid/cwd" ]]; then
+    readlink "/proc/$pid/cwd" 2>/dev/null || echo "unknown"
+  else
+    lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | grep '^n' | cut -c2- || echo "unknown"
+  fi
+}
+
+# Total physical memory in KB — portable across macOS (sysctl) and Linux (/proc).
+_claude_procs_total_mem_kb() {
+  if [[ -r /proc/meminfo ]]; then
+    awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo
+  else
+    local bytes=$(sysctl -n hw.memsize 2>/dev/null)
+    [[ -n "$bytes" ]] && echo $((bytes / 1024)) || echo 0
+  fi
 }
 
 _claude_procs_categorize() {
@@ -1357,9 +1389,8 @@ _claude_procs_watch() {
     local total_mem_kb=0
     local -a vitest_pids vitest_mems vitest_cmds
     
-    # Get total system memory in KB (macOS)
-    local total_system_mem_kb=$(sysctl -n hw.memsize 2>/dev/null)
-    total_system_mem_kb=$((total_system_mem_kb / 1024))
+    # Get total system memory in KB (portable: macOS sysctl / Linux /proc)
+    local total_system_mem_kb=$(_claude_procs_total_mem_kb)
     
     # Find vitest processes
     while IFS= read -r line; do

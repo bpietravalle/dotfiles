@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+# claude-procs-reap — age-gated reaper for orphaned Claude-spawned processes.
+#
+# An "orphan" is a tracked process (node/python/tsx/pytest/mcp/serena/…) whose
+# parent chain contains NO live `claude` process — i.e. the session that spawned
+# it is gone but the process lingered. This is the multi-day straggler class:
+# esbuild --service, pnpm/tsx trees, orphaned MCP/serena servers, dangling
+# pytest workers, python multiprocessing.resource_tracker, etc.
+#
+# Safety model:
+#   - NEVER touches `claude` itself, registered detached daemons
+#     (~/.claude/procs/watcher.pid, ~/.claude/monitor/daemon.pid), or anything
+#     with a live-claude ancestor.
+#   - Age-gated (default 10m) so in-flight, momentarily-parentless hook drains
+#     (activity.py record-*), yaml loads, and just-spawned helpers survive.
+#   - SIGTERM first, grace period, then SIGKILL survivors (esbuild --service and
+#     multiprocessing trackers ignore SIGTERM — a single signal leaves them).
+#
+# Cross-platform: macOS (lsof / bash 3.2) and Linux (/proc). No bash-4 features.
+#
+# Usage:
+#   claude-procs-reap                 # preview + confirm, orphans older than 10m
+#   claude-procs-reap --dry-run       # show what would be reaped, kill nothing
+#   claude-procs-reap --yes           # skip confirmation (for daemons/cron)
+#   claude-procs-reap --min-age 1h    # only orphans older than 1h  (s/m/h/d or raw secs)
+#   claude-procs-reap --grace 8       # seconds between SIGTERM and SIGKILL (default 5)
+#   claude-procs-reap --quiet         # summary line only (implies --yes)
+#
+# Exit: 0 always (reaping is best-effort); prints count reaped.
+
+set -u
+
+MIN_AGE_SPEC="10m"
+GRACE=5
+DRY_RUN=0
+ASSUME_YES=0
+QUIET=0
+
+TRACK_RE='node|python|pdm|vitest|jest|pytest|tsx|mcp|serena|npx|\.local/bin/claude|\.local/share/claude'
+
+# ── arg parse ──────────────────────────────────────────────────────────────
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --min-age)   MIN_AGE_SPEC="$2"; shift 2 ;;
+    --min-age=*) MIN_AGE_SPEC="${1#*=}"; shift ;;
+    --grace)     GRACE="$2"; shift 2 ;;
+    --grace=*)   GRACE="${1#*=}"; shift ;;
+    --dry-run|-n) DRY_RUN=1; shift ;;
+    --yes|-y)    ASSUME_YES=1; shift ;;
+    --quiet|-q)  QUIET=1; ASSUME_YES=1; shift ;;
+    -h|--help)
+      sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "claude-procs-reap: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+# ── duration + etime helpers (octal-safe via 10#) ───────────────────────────
+parse_duration() {
+  local d="$1"
+  case "$d" in
+    *d) echo $(( 10#${d%d} * 86400 )) ;;
+    *h) echo $(( 10#${d%h} * 3600 )) ;;
+    *m) echo $(( 10#${d%m} * 60 )) ;;
+    *s) echo $(( 10#${d%s} )) ;;
+    *)  echo $(( 10#$d )) ;;
+  esac
+}
+
+# ps etime → seconds. Format: [[dd-]hh:]mm:ss
+etime_secs() {
+  local e="$1" days=0 rest="$1" h=0 m=0 sec=0
+  case "$e" in *-*) days="${e%%-*}"; rest="${e#*-}" ;; esac
+  local oldifs="$IFS"; IFS=:; set -- $rest; IFS="$oldifs"
+  if   [ "$#" -eq 3 ]; then h="$1"; m="$2"; sec="$3"
+  elif [ "$#" -eq 2 ]; then m="$1"; sec="$2"
+  else sec="$1"; fi
+  echo $(( 10#${days:-0}*86400 + 10#${h:-0}*3600 + 10#${m:-0}*60 + 10#${sec:-0} ))
+}
+
+MIN_AGE_SECS=$(parse_duration "$MIN_AGE_SPEC")
+
+# ── live-claude + registered-daemon PID sets (space-padded for cheap lookup) ─
+CLAUDE_PIDS=" $(ps -eo pid,command 2>/dev/null \
+  | awk '/\.local\/bin\/claude/ || /\.local\/share\/claude/ { if ($0 !~ /grep/) print $1 }' \
+  | tr '\n' ' ') "
+
+snapshot_claude_pids() {
+  CLAUDE_PIDS=" $(ps -eo pid,command 2>/dev/null \
+    | awk '/\.local\/bin\/claude/ || /\.local\/share\/claude/ { if ($0 !~ /grep/) print $1 }' \
+    | tr '\n' ' ') "
+}
+
+DAEMON_PIDS=" "
+for f in "$HOME/.claude/procs/watcher.pid" "$HOME/.claude/monitor/daemon.pid"; do
+  [ -f "$f" ] && DAEMON_PIDS="$DAEMON_PIDS$(tr -d ' \n' < "$f") "
+done
+
+is_claude()  { case "$CLAUDE_PIDS" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+is_daemon()  { case "$DAEMON_PIDS" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+ppid_of()    { ps -p "$1" -o ppid= 2>/dev/null | tr -d ' '; }
+
+# Walk PPID chain; 0 if a live-claude ancestor exists, else 1 (= orphan).
+has_claude_ancestor() {
+  local pid="$1" guard=0
+  while [ "$pid" != "0" ] && [ "$pid" != "1" ] && [ "$guard" -lt 30 ]; do
+    is_claude "$pid" && return 0
+    pid="$(ppid_of "$pid")"
+    [ -z "$pid" ] && return 1
+    guard=$((guard + 1))
+  done
+  return 1
+}
+
+# ── collect orphan roots (age-gated) ────────────────────────────────────────
+ORPHAN_PIDS=""
+ORPHAN_ROWS=""
+resnapped=0
+
+while IFS= read -r line; do
+  pid=$(printf '%s\n' "$line" | awk '{print $1}')
+  case "$pid" in ''|*[!0-9]*) continue ;; esac
+  etime=$(printf '%s\n' "$line" | awk '{print $3}')
+  cmd=$(printf '%s\n' "$line" | awk '{for(i=4;i<=NF;i++)printf "%s ",$i}')
+
+  is_claude "$pid" && continue
+  is_daemon "$pid" && continue
+
+  if has_claude_ancestor "$pid"; then
+    continue
+  elif [ "$resnapped" -eq 0 ]; then
+    # Race recovery: a claude that started after our snapshot but before this
+    # walk would look like an orphan. Re-snapshot once, recheck.
+    snapshot_claude_pids
+    resnapped=1
+    has_claude_ancestor "$pid" && continue
+  fi
+
+  secs=$(etime_secs "$etime")
+  [ "$secs" -lt "$MIN_AGE_SECS" ] && continue   # spare in-flight
+
+  ORPHAN_PIDS="$ORPHAN_PIDS $pid"
+  # truncate cmd for display
+  short=$(printf '%s' "$cmd" | cut -c1-72)
+  ORPHAN_ROWS="${ORPHAN_ROWS}${pid}|${etime}|${short}
+"
+done <<EOF
+$(ps -eo pid,ppid,etime,command 2>/dev/null | grep -E "$TRACK_RE" | grep -v grep | grep -v 'claude-procs-reap')
+EOF
+
+# strip leading space
+ORPHAN_PIDS="${ORPHAN_PIDS# }"
+
+count=0
+for p in $ORPHAN_PIDS; do count=$((count + 1)); done
+
+if [ "$count" -eq 0 ]; then
+  [ "$QUIET" -eq 1 ] || echo "claude-procs-reap: no stale orphans (age >= ${MIN_AGE_SPEC})"
+  exit 0
+fi
+
+# ── preview ─────────────────────────────────────────────────────────────────
+if [ "$QUIET" -eq 0 ]; then
+  echo "Stale orphans (age >= ${MIN_AGE_SPEC}, no live claude ancestor):"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  printf "%-7s %-13s %s\n" "PID" "AGE" "COMMAND"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  printf '%s' "$ORPHAN_ROWS" | while IFS='|' read -r p a c; do
+    [ -z "$p" ] && continue
+    printf "%-7s %-13s %s\n" "$p" "$a" "$c"
+  done
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "$count orphan tree(s). Protected: claude, registered daemons, live-owned procs."
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "(dry-run — nothing killed)"
+  exit 0
+fi
+
+# ── confirm ─────────────────────────────────────────────────────────────────
+if [ "$ASSUME_YES" -eq 0 ]; then
+  printf "Reap these %s tree(s)? [y/N] " "$count"
+  read -r reply
+  case "$reply" in y|Y|yes|YES) ;; *) echo "Cancelled."; exit 0 ;; esac
+fi
+
+# ── collect each tree's full PID list, children-first ───────────────────────
+# Collection MUST happen BEFORE any signal is sent. `pgrep -P` can only find a
+# child while its parent is alive; once the parent dies the child reparents to
+# init and becomes unreachable that way. Snapshotting up front is what lets the
+# SIGKILL phase still reach a child that ignored SIGTERM after its parent had
+# already exited (esbuild --service, multiprocessing.resource_tracker).
+collect_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    collect_tree "$child"
+  done
+  echo "$pid"
+}
+
+TREE_PIDS=""
+for p in $ORPHAN_PIDS; do
+  TREE_PIDS="$TREE_PIDS $(collect_tree "$p" | tr '\n' ' ')"
+done
+
+# TERM every PID in every tree (children first), grace, then KILL survivors.
+# Two-phase is load-bearing: esbuild --service / multiprocessing trackers
+# ignore SIGTERM outright.
+for p in $TREE_PIDS; do kill -TERM "$p" 2>/dev/null; done
+sleep "$GRACE"
+
+survivors=0
+for p in $TREE_PIDS; do
+  if kill -0 "$p" 2>/dev/null; then
+    kill -KILL "$p" 2>/dev/null
+    survivors=$((survivors + 1))
+  fi
+done
+
+reaped=0
+for p in $ORPHAN_PIDS; do reaped=$((reaped + 1)); done
+
+if [ "$QUIET" -eq 1 ]; then
+  echo "claude-procs-reap: reaped $reaped orphan tree(s) (${survivors} needed SIGKILL)"
+else
+  echo "✅ Reaped $reaped orphan tree(s); $survivors required SIGKILL escalation."
+fi
+exit 0
