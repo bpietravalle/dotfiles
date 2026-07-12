@@ -457,6 +457,13 @@ claude-unfreeze() {
 # PROCESS MANAGEMENT (find and kill runaway test processes)
 # ═══════════════════════════════════════════════════════════════
 
+# The set of Claude-adjacent processes we track. ONE definition — it was
+# previously copy-pasted at each ps|grep site and had already drifted (the
+# copies omitted mcp/serena, so `list`/`kill` could not see the orphaned MCP
+# servers the reaper kills). Keep in lockstep with TRACK_RE in
+# bin/claude-procs-reap, which is the kill-path source of truth.
+CLAUDE_PROCS_TRACK_RE='node|python|pdm|vitest|jest|pytest|tsx|mcp|serena|bash.*claude|npx|\.local/bin/claude|\.local/share/claude'
+
 claude-procs() {
   local mode="${1:-}"
   
@@ -900,7 +907,7 @@ _claude_procs_list() {
         sort_keys+=("0")
         ;;
     esac
-  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx|\.local/bin/claude|\.local/share/claude' | grep -v grep | grep -v '_claude_procs')
+  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E "$CLAUDE_PROCS_TRACK_RE" | grep -v grep | grep -v '_claude_procs')
   
   # Sort if requested
   if [[ -n "$sort_by" ]]; then
@@ -973,6 +980,34 @@ _claude_procs_list() {
 }
 
 _claude_procs_kill() {
+  # `kill --orphans` is the same job as `reap`, so route it to the ONE engine
+  # (bin/claude-procs-reap) rather than the second, divergent copy below. The
+  # local copy silently lacked mcp/serena in its scan regex and never escalated
+  # SIGTERM→SIGKILL, so it missed exactly the stragglers that matter.
+  if [[ " $* " == *" --orphans "* ]]; then
+    # Explicit `kill --orphans` means "now" → no age gate. Map only the flags the
+    # engine understands; kill-only flags (--count/--type/--oldest) don't apply
+    # to an orphan sweep, and --force means "don't wait" → zero grace.
+    local -a reap_args
+    reap_args=(--min-age 0)
+    local a
+    for a in "$@"; do
+      case "$a" in
+        --orphans)        ;;                       # implied: reap is orphan-only
+        --force|-9)       reap_args+=(--grace 0) ;;
+        --dry-run|-n)     reap_args+=(--dry-run) ;;
+        --yes|-y)         reap_args+=(--yes) ;;
+        --quiet|-q)       reap_args+=(--quiet) ;;
+      esac
+    done
+    if command -v claude-procs-reap &>/dev/null; then
+      claude-procs-reap "${reap_args[@]}"
+    else
+      "$HOME/dev/dotfiles/bin/claude-procs-reap" "${reap_args[@]}"
+    fi
+    return $?
+  fi
+
   # Check if first arg is a PID or a flag
   if [[ "$1" =~ ^[0-9]+$ ]]; then
     # Single PID kill
@@ -1178,7 +1213,7 @@ _claude_procs_bulk_kill() {
         sort_keys+=("0")
         ;;
     esac
-  done < <(ps -eo pid,ppid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx|\.local/bin/claude|\.local/share/claude' | grep -v grep | grep -v '_claude_procs')
+  done < <(ps -eo pid,ppid,etime,%cpu,%mem,command | grep -E "$CLAUDE_PROCS_TRACK_RE" | grep -v grep | grep -v '_claude_procs')
   
   if [[ ${#pids[@]} -eq 0 ]]; then
     echo "No matching processes found"
@@ -1314,7 +1349,7 @@ _claude_procs_interactive_cleanup() {
       test_pids+=("$pid")
       idx=$((idx + 1))
     fi
-  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E 'node|python|pdm|vitest|jest|pytest|tsx|bash.*claude|npx|\.local/bin/claude|\.local/share/claude' | grep -v grep | grep -v '_claude_procs')
+  done < <(ps -eo pid,etime,%cpu,%mem,command | grep -E "$CLAUDE_PROCS_TRACK_RE" | grep -v grep | grep -v '_claude_procs')
   
   if [[ ${#test_pids[@]} -eq 0 ]]; then
     echo "No test processes found"
