@@ -55,54 +55,194 @@ get_github_url() {
   echo "$github_url"
 }
 
-# Delete local branches whose upstream tracking branch no longer exists on remote.
-# Handy after squash-merged PRs where GitHub auto-deletes the head branch.
-# Uses -D (force) since squash merges produce different SHAs than the local branch.
-# Skips branches that are checked out in any worktree (Claude Code agent worktrees, etc).
-# Best-effort: always returns 0 so callers can chain without bailing on partial cleanup.
+# Delete local branches whose work has PROVABLY LANDED on origin (RVT-2886).
+#
+# Usage: git-prune-gone [--dry-run|-n] [--yes|-y]
+#
+# WHAT CHANGED, AND WHY (2026-07-13 incident)
+# -------------------------------------------
+# This function used to force-delete every branch whose upstream was [gone], guarded
+# ONLY by a skip-list of branches checked out in a worktree. Both halves were wrong:
+#
+#   * `[gone]` means "the remote ref is missing". It does NOT mean "the work landed".
+#     A remote branch deleted by hand — or by any tooling — on work that never merged
+#     produces exactly the same [gone] as a squash-merged PR. `git branch -D` does not
+#     ask, and the commits go with it.
+#
+#   * The worktree skip-list answered "is this branch in use", which is not the same
+#     question as "is this branch safe to destroy". Worse, it made removing a worktree
+#     silently ARM a force-delete in a tool the remover never ran — the two-step that
+#     destroyed ~22 rescue worktrees and their branch refs on 2026-07-13.
+#
+#     It was also REDUNDANT: git itself already refuses to delete a branch checked out
+#     in another worktree ("error: cannot delete branch 'x' used by worktree at ...",
+#     exit 1). The skip-list was re-implementing a guarantee git enforces, while
+#     substituting a wrong predicate for the one that mattered. It is DELETED, not
+#     repaired — a protection registry inverts the default (things become persistent-
+#     unless-listed), agents discover the exemption, and the population grows without
+#     bound.
+#
+# THE PREDICATE IS NOW POSITIVE PROOF OF LANDING, AND NOTHING ELSE:
+#
+#   1. the branch is an ancestor of origin/<default>            (a normal merge), OR
+#   2. origin has a MERGED pull request whose head is that branch (a squash merge,
+#      whose SHA necessarily differs from the local tip).
+#
+# Absence of a signal is never proof. [gone], "no worktree", "no upstream" — none of
+# them mean the work is safe to destroy.
+#
+# FAIL CLOSED. Any error resolving remote state means we do NOT delete. This is the
+# direct lesson of RVT-2881, whose safety check ran `git log @{u}..` — which exits 128
+# with EMPTY STDOUT on a never-pushed branch, and empty output was read as "nothing
+# unpushed, safe to delete". The error case IS the dangerous population.
+#
+# THE LIST SHOWN IS THE LIST DELETED. Every branch is named before anything is removed,
+# and deletion iterates that exact list. (The old code printed the SKIPPED branches and
+# never printed what it was about to destroy.)
 git-prune-gone() {
-  git fetch --prune || return 1
+  local dry_run=0 assume_yes=0
+  while (( $# )); do
+    case "$1" in
+      -n|--dry-run) dry_run=1 ;;
+      -y|--yes)     assume_yes=1 ;;
+      -h|--help)
+        echo "usage: git-prune-gone [--dry-run|-n] [--yes|-y]"
+        echo "  Deletes local branches PROVEN landed on origin (merged, or a merged PR)."
+        echo "  Anything unproven — including any error resolving remote state — is KEPT."
+        return 0
+        ;;
+      *) echo "git-prune-gone: unknown option '$1'" >&2; return 2 ;;
+    esac
+    shift
+  done
 
-  local gone
-  gone=$(git for-each-ref --format '%(refname:short) %(upstream:track)' refs/heads \
-         | awk '$2 == "[gone]" {print $1}')
+  git rev-parse --git-dir >/dev/null 2>&1 || {
+    echo "git-prune-gone: not a git repository." >&2
+    return 1
+  }
 
-  if [[ -z "$gone" ]]; then
-    echo "No gone branches."
+  # Fail closed: without a fresh view of origin we cannot prove anything landed.
+  if ! git fetch --prune; then
+    echo "git-prune-gone: 'git fetch --prune' FAILED — refusing to delete anything." >&2
+    echo "  (cannot prove what landed without a current view of origin; fail closed)" >&2
+    return 1
+  fi
+
+  # Fail closed: the default branch is the ancestor test's reference point.
+  local default
+  default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  if [[ -z "$default" ]] || ! git rev-parse --verify --quiet "refs/remotes/origin/$default" >/dev/null; then
+    echo "git-prune-gone: cannot resolve origin's default branch — refusing to delete anything." >&2
+    echo "  (try: git remote set-head origin -a)" >&2
+    return 1
+  fi
+
+  # gh proves the squash-merge case. Without it we can still prove ordinary merges via
+  # the ancestor test; squash-merged branches simply stay KEPT (fail closed, not silent).
+  local gh_ok=0
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    gh_ok=1
+  fi
+
+  local -a landed keep_reasons
+  local branch rc pr
+
+  while IFS= read -r branch; do
+    [[ -n "$branch" ]] || continue
+    [[ "$branch" == "$default" ]] && continue
+
+    # PROOF 1 — ordinary merge: the tip is reachable from origin/<default>.
+    # Exit codes: 0 = ancestor, 1 = not an ancestor, anything else = ERROR. An error
+    # must never be read as "not landed AND therefore fine to look at further"; it is
+    # simply not proof, so the branch is kept either way.
+    git merge-base --is-ancestor "refs/heads/$branch" "refs/remotes/origin/$default" 2>/dev/null
+    rc=$?
+    if (( rc == 0 )); then
+      landed+=("$branch")
+      continue
+    elif (( rc != 1 )); then
+      keep_reasons+=("$branch|KEPT: error resolving ancestry (git exit $rc) — fail closed")
+      continue
+    fi
+
+    # PROOF 2 — squash merge: origin has a MERGED PR whose head is this branch.
+    if (( gh_ok )); then
+      pr=$(gh pr list --head "$branch" --state merged --limit 1 --json number \
+             --jq '.[0].number' 2>/dev/null)
+      rc=$?
+      if (( rc != 0 )); then
+        keep_reasons+=("$branch|KEPT: could not query origin for a merged PR — fail closed")
+      elif [[ -n "$pr" && "$pr" != "null" ]]; then
+        landed+=("$branch")
+      else
+        keep_reasons+=("$branch|KEPT: not merged into origin/$default and no merged PR — unlanded work")
+      fi
+    else
+      keep_reasons+=("$branch|KEPT: gh unavailable/unauthenticated, cannot prove a squash-merged PR — fail closed")
+    fi
+  done < <(git for-each-ref --format '%(refname:short)' refs/heads)
+
+  if (( ${#keep_reasons[@]} )); then
+    echo "Kept (not proven landed):"
+    local entry
+    for entry in "${keep_reasons[@]}"; do
+      printf '  %-45s %s\n' "${entry%%|*}" "${entry#*|}"
+    done
+  fi
+
+  if (( ${#landed[@]} == 0 )); then
+    echo "Nothing proven landed. No branches deleted."
     return 0
   fi
 
-  # Branches currently checked out in any worktree — never try to delete these
-  local worktree_branches
-  worktree_branches=$(git worktree list --porcelain \
-                      | awk '/^branch / {sub("refs/heads/", "", $2); print $2}')
+  # THE LIST SHOWN IS THE LIST DELETED — printed before anything is destroyed, and the
+  # deletion loop below iterates this exact array.
+  echo "Will DELETE ${#landed[@]} branch(es) proven landed on origin:"
+  local b
+  for b in "${landed[@]}"; do
+    printf '  %-45s %s\n' "$b" "$(git rev-parse --short "refs/heads/$b" 2>/dev/null)"
+  done
 
-  local skipped="" prunable="$gone"
-  if [[ -n "$worktree_branches" ]]; then
-    skipped=$(echo "$gone"  | grep -xFf <(echo "$worktree_branches") 2>/dev/null || true)
-    prunable=$(echo "$gone" | grep -vxFf <(echo "$worktree_branches") 2>/dev/null || true)
-  fi
-
-  if [[ -n "$skipped" ]]; then
-    echo "Skipped (in use by worktree):"
-    echo "$skipped" | sed 's/^/  /'
-  fi
-
-  if [[ -z "$prunable" ]]; then
+  if (( dry_run )); then
+    echo "--dry-run: nothing deleted."
     return 0
   fi
 
-  # If current branch is among the prunable ones, switch off it first
-  local current default
+  if (( ! assume_yes )); then
+    local reply
+    read -q "reply?Delete these ${#landed[@]} branch(es)? [y/N] "
+    echo
+    if [[ "$reply" != [yY] ]]; then
+      echo "Aborted. Nothing deleted."
+      return 0
+    fi
+  fi
+
+  # If HEAD is on one of them, step off first — otherwise git refuses and we would
+  # report a deletion that did not happen.
+  local current
   current=$(git symbolic-ref --short HEAD 2>/dev/null)
-  if echo "$prunable" | grep -qx "$current"; then
-    default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
-    : "${default:=master}"
-    echo "Switching off '$current' to '$default' before deletion..."
-    git switch "$default" || return 1
-  fi
+  for b in "${landed[@]}"; do
+    if [[ "$b" == "$current" ]]; then
+      echo "Switching off '$current' to '$default' before deletion..."
+      git switch "$default" || {
+        echo "git-prune-gone: could not switch off '$current' — nothing deleted." >&2
+        return 1
+      }
+      break
+    fi
+  done
 
-  echo "$prunable" | xargs git branch -D || true
+  # Delete one at a time so each outcome is reported against the branch it belongs to.
+  # A branch checked out in another worktree fails here — git's own guarantee, and the
+  # reason the skip-list was never what protected it.
+  for b in "${landed[@]}"; do
+    if git branch -D "$b" >/dev/null 2>&1; then
+      echo "  deleted  $b"
+    else
+      echo "  FAILED   $b (still checked out in a worktree, or ref locked)"
+    fi
+  done
   return 0
 }
 
