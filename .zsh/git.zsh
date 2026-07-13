@@ -55,6 +55,115 @@ get_github_url() {
   echo "$github_url"
 }
 
+# ─── Landed-proof: the ONE predicate every destructive path in this file uses ──
+#
+# "Is it safe to destroy this branch?" has exactly one right answer: YES only when
+# the work is PROVABLY on origin. Every other predicate this file has carried —
+# `[gone]`, "no worktree", "no open PR", "older than 2h" — is the ABSENCE of a
+# signal, and absence is not proof. Each one destroyed real work (RVT-2881,
+# RVT-2886).
+#
+# It lives in one place because it used to live in four, and they disagreed. Two
+# predicates answering the same safety question is how the 2026-07-13 two-step
+# existed at all: one tool's "safe" was another tool's "in use".
+#
+# Preflight resolves the shared facts once. Echoes "<default>\t<gh_ok>"; returns
+# non-zero — meaning DELETE NOTHING — if origin cannot be seen or named.
+_git_landed_preflight() {
+  local label="${1:-prune}"
+
+  # Without a fresh view of origin we cannot prove anything landed.
+  if ! git fetch --prune >/dev/null 2>&1; then
+    echo "$label: 'git fetch --prune' FAILED — refusing to delete anything." >&2
+    echo "  (cannot prove what landed without a current view of origin; fail closed)" >&2
+    return 1
+  fi
+
+  # The default branch is the ancestor test's reference point.
+  local default
+  default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  if [[ -z "$default" ]] || ! git rev-parse --verify --quiet "refs/remotes/origin/$default" >/dev/null; then
+    echo "$label: cannot resolve origin's default branch — refusing to delete anything." >&2
+    echo "  (try: git remote set-head origin -a)" >&2
+    return 1
+  fi
+
+  # gh proves the squash-merge case. Without it ordinary merges are still provable
+  # via the ancestor test; squash-merged branches simply stay KEPT (fail closed).
+  local gh_ok=0
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    gh_ok=1
+  fi
+
+  printf '%s\t%s' "$default" "$gh_ok"
+}
+
+# Is <branch> provably landed on origin? Echoes exactly one of:
+#   landed
+#   keep|<reason>
+# Proof is positive, and only these two forms count:
+#   1. the branch is an ancestor of origin/<default>              (an ordinary merge)
+#   2. origin has a MERGED PR whose head is that branch           (a squash merge,
+#      whose SHA necessarily differs from the local tip)
+# Anything else — including EVERY error path — is `keep`. An error is not proof,
+# and the error case IS the dangerous population: RVT-2881's check ran
+# `git log @{u}..`, which exits 128 with EMPTY stdout on a never-pushed branch,
+# and empty output was read as "nothing unpushed, safe to delete".
+#
+# The local-branch form: proves refs/heads/<branch>.
+# Args: <branch> <default> <gh_ok>
+_git_branch_landed_proof() {
+  _git_ref_landed_proof "refs/heads/$1" "$1" "$2" "$3"
+}
+
+# The remote form: proves refs/remotes/origin/<branch>. Same proof, different ref —
+# deleting a remote branch destroys the copy of last resort, so it gets the same
+# standard, not a weaker one.
+# Args: <branch> <default> <gh_ok>
+_git_remote_landed_proof() {
+  _git_ref_landed_proof "refs/remotes/origin/$1" "$1" "$2" "$3"
+}
+
+# Args: <ref-to-prove> <branch-name> <default> <gh_ok>
+_git_ref_landed_proof() {
+  local ref="$1" branch="$2" default="$3" gh_ok="$4" rc pr
+
+  # PROOF 1 — ordinary merge: the tip is reachable from origin/<default>.
+  # Exit codes: 0 = ancestor, 1 = not an ancestor, anything else = ERROR. An error
+  # must never be read as "not landed, therefore examine further" — it is simply
+  # not proof, so the branch is kept either way.
+  git merge-base --is-ancestor "$ref" "refs/remotes/origin/$default" 2>/dev/null
+  rc=$?
+  if (( rc == 0 )); then
+    printf 'landed'
+    return 0
+  elif (( rc != 1 )); then
+    printf 'keep|error resolving ancestry (git exit %s) — fail closed' "$rc"
+    return 0
+  fi
+
+  # PROOF 2 — squash merge: origin has a MERGED PR whose head is this branch.
+  # Note "--state merged", not "not open": a CLOSED-unmerged PR is work that was
+  # explicitly ABANDONED, i.e. the strongest possible signal it never landed. The
+  # old verdict treated any non-OPEN PR as "captured" and force-deleted it.
+  if (( ! gh_ok )); then
+    printf 'keep|gh unavailable/unauthenticated, cannot prove a squash-merged PR — fail closed'
+    return 0
+  fi
+
+  pr=$(gh pr list --head "$branch" --state merged --limit 1 --json number \
+         --jq '.[0].number' 2>/dev/null)
+  rc=$?
+  if (( rc != 0 )); then
+    printf 'keep|could not query origin for a merged PR — fail closed'
+  elif [[ -n "$pr" && "$pr" != "null" ]]; then
+    printf 'landed'
+  else
+    printf 'keep|not merged into origin/%s and no merged PR — unlanded work' "$default"
+  fi
+  return 0
+}
+
 # Delete local branches whose work has PROVABLY LANDED on origin (RVT-2886).
 #
 # Usage: git-prune-gone [--dry-run|-n] [--yes|-y]
@@ -121,64 +230,23 @@ git-prune-gone() {
     return 1
   }
 
-  # Fail closed: without a fresh view of origin we cannot prove anything landed.
-  if ! git fetch --prune; then
-    echo "git-prune-gone: 'git fetch --prune' FAILED — refusing to delete anything." >&2
-    echo "  (cannot prove what landed without a current view of origin; fail closed)" >&2
-    return 1
-  fi
-
-  # Fail closed: the default branch is the ancestor test's reference point.
-  local default
-  default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
-  if [[ -z "$default" ]] || ! git rev-parse --verify --quiet "refs/remotes/origin/$default" >/dev/null; then
-    echo "git-prune-gone: cannot resolve origin's default branch — refusing to delete anything." >&2
-    echo "  (try: git remote set-head origin -a)" >&2
-    return 1
-  fi
-
-  # gh proves the squash-merge case. Without it we can still prove ordinary merges via
-  # the ancestor test; squash-merged branches simply stay KEPT (fail closed, not silent).
-  local gh_ok=0
-  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    gh_ok=1
-  fi
+  # Fail closed: no view of origin, or no name for the default branch → delete nothing.
+  local preflight default gh_ok
+  preflight=$(_git_landed_preflight git-prune-gone) || return 1
+  IFS=$'\t' read -r default gh_ok <<< "$preflight"
 
   local -a landed keep_reasons
-  local branch rc pr
+  local branch verdict
 
   while IFS= read -r branch; do
     [[ -n "$branch" ]] || continue
     [[ "$branch" == "$default" ]] && continue
 
-    # PROOF 1 — ordinary merge: the tip is reachable from origin/<default>.
-    # Exit codes: 0 = ancestor, 1 = not an ancestor, anything else = ERROR. An error
-    # must never be read as "not landed AND therefore fine to look at further"; it is
-    # simply not proof, so the branch is kept either way.
-    git merge-base --is-ancestor "refs/heads/$branch" "refs/remotes/origin/$default" 2>/dev/null
-    rc=$?
-    if (( rc == 0 )); then
+    verdict=$(_git_branch_landed_proof "$branch" "$default" "$gh_ok")
+    if [[ "$verdict" == "landed" ]]; then
       landed+=("$branch")
-      continue
-    elif (( rc != 1 )); then
-      keep_reasons+=("$branch|KEPT: error resolving ancestry (git exit $rc) — fail closed")
-      continue
-    fi
-
-    # PROOF 2 — squash merge: origin has a MERGED PR whose head is this branch.
-    if (( gh_ok )); then
-      pr=$(gh pr list --head "$branch" --state merged --limit 1 --json number \
-             --jq '.[0].number' 2>/dev/null)
-      rc=$?
-      if (( rc != 0 )); then
-        keep_reasons+=("$branch|KEPT: could not query origin for a merged PR — fail closed")
-      elif [[ -n "$pr" && "$pr" != "null" ]]; then
-        landed+=("$branch")
-      else
-        keep_reasons+=("$branch|KEPT: not merged into origin/$default and no merged PR — unlanded work")
-      fi
     else
-      keep_reasons+=("$branch|KEPT: gh unavailable/unauthenticated, cannot prove a squash-merged PR — fail closed")
+      keep_reasons+=("$branch|KEPT: ${verdict#keep|}")
     fi
   done < <(git for-each-ref --format '%(refname:short)' refs/heads)
 
@@ -676,7 +744,16 @@ _git_merge_pr_clean_scoped() {
   # cleanup is still progress.
   echo
   echo "==> Cleaning up related branches and worktrees:"
-  local branch wt_path locked deleted=0 wt_removed=0 failed=0
+  local branch wt_path locked verdict deleted=0 wt_removed=0 failed=0
+  # The landed-proof check below needs a current view of origin (the merge just
+  # happened) and gh for the squash-merge case. `gh pr merge --squash` is exactly
+  # the case the ancestor test cannot see, so without gh nothing here is provable
+  # and every branch is skipped — loudly, and with its worktree left in place.
+  local gh_ok=0
+  git fetch --prune >/dev/null 2>&1 || true
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    gh_ok=1
+  fi
   # Refresh worktree info post-merge in case anything shifted.
   wt_info=$(git worktree list --porcelain)
   main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
@@ -705,17 +782,29 @@ _git_merge_pr_clean_scoped() {
     fi
 
     if [[ -n "$wt_path" && "$wt_path" != "$main_wt" ]]; then
-      if [[ "$locked" == "1" ]]; then
-        echo "Unlocking worktree: $wt_path"
-        git worktree unlock "$wt_path" 2>/dev/null || true
-      fi
+      # No unlock, and no --force. The live guard above already skips locked and
+      # dirty worktrees, so the unlock branch that used to sit here was a loaded
+      # gun behind a safety catch: unreachable today, re-armed by the next refactor
+      # of that guard. `git worktree remove` (unforced) refusing a dirty tree is a
+      # real second net; --force existed only to defeat it. See RVT-2881.
       echo "Removing worktree: $wt_path"
-      if git worktree remove --force "$wt_path" 2>/dev/null; then
-        wt_removed=$((wt_removed + 1))
-      else
-        echo "  failed to remove $wt_path" >&2
+      if ! git worktree remove "$wt_path"; then
+        echo "  SKIP $branch — could not remove its worktree $wt_path" >&2
         failed=$((failed + 1))
+        continue
       fi
+      wt_removed=$((wt_removed + 1))
+    fi
+
+    # Proof, not assumption. `$related` is "the PR head plus branches whose commits
+    # patch-id-match it" — a heuristic for "this landed with the PR", and a heuristic
+    # is not proof. Ask the same question every other destructive path in this file
+    # now asks, and skip anything that cannot answer it.
+    verdict=$(_git_branch_landed_proof "$branch" "$default" "$gh_ok")
+    if [[ "$verdict" != "landed" ]]; then
+      echo "  SKIP $branch — ${verdict#keep|}" >&2
+      failed=$((failed + 1))
+      continue
     fi
 
     echo "Deleting branch: $branch"
@@ -735,26 +824,28 @@ _git_merge_pr_clean_scoped() {
 # Unified entry point + primitives. Default: local only (safe in shared repos —
 # never touches origin, so other engineers' branches are preserved).
 #
-# Deletion policy — LOCAL and REMOTE are independent time gates (no coupling):
-#   1. Captured work is always deletable — a branch whose commits are merged into
-#      the default branch, or whose head branch has a closed/merged PR.
-#   2. A branch/remote with an OPEN PR is PROTECTED (you may still push fixes).
-#   3. LOCAL: an uncaptured branch (no PR, not merged) or a detached worktree is
-#      eligible once its last commit is older than GIT_PRUNE_MIN_AGE seconds
-#      (default 7200 = 2h). Shields active local WIP / live agent worktrees.
-#   4. REMOTE (`-r`): any origin branch with no open PR is eligible once its last
-#      commit is older than GIT_PRUNE_REMOTE_MIN_AGE seconds (default 21600 = 6h).
-#      NOT coupled to local — a remote-only branch is fair game after 6h. The
-#      longer window is the safety margin for the shared remote (an engineer's
-#      untouched-for-6h, PR-less branch is treated as abandoned).
+# Deletion policy — ONE predicate, everywhere: POSITIVE PROOF OF LANDING (RVT-2886).
+#   1. A branch (local or remote) is deletable ONLY if its work is PROVEN to be on
+#      origin: merged into origin/<default>, or carried by a MERGED PR. See
+#      _git_branch_landed_proof. Every error path keeps.
+#   2. Nothing else is proof. Not "no open PR", not "the remote ref is [gone]", not
+#      "older than N hours", not "no worktree holds it". Each of those is the
+#      ABSENCE of a signal, each one shipped here, and each one destroyed real work.
+#   3. AGE survives in exactly one place, because there it is the only thing left:
+#      DETACHED worktrees carry no branch ref, so landing cannot be proved or
+#      disproved. GIT_PRUNE_MIN_AGE (default 7200 = 2h) gates those alone.
+#   4. REMOTE (`-r`) additionally holds proven-landed branches for
+#      GIT_PRUNE_REMOTE_MIN_AGE (default 21600 = 6h) — proof is necessary, and on
+#      shared state the age window is a second hold on top of it.
+#   5. A LOCKED worktree is never touched, at any age, under any flag. Nothing in
+#      this file calls `git worktree unlock`.
 #
 #   git-prune-orphans          — UNIFIED entry point. Default = local only.
-#                                -r → remote (all no-PR origin branches, 6h-gated)
-#                                     THEN local. Remote-enable is a single flag.
+#                                -r → remote (proven-landed, 6h-gated) THEN local.
 #   _git_remote_orphans         — LIST remote branches on origin with no open PR
-#   _git_prune_remote_orphans   — DELETE no-PR, 6h-aged remote branches
+#   _git_prune_remote_orphans   — DELETE proven-landed, 6h-aged remote branches
 #   _git_local_orphans          — LIST local branches with no corresponding remote
-#   _git_prune_local_orphans    — DELETE captured/aged-out local orphans AND the
+#   _git_prune_local_orphans    — DELETE proven-landed local orphans AND the
 #                                worktrees that hold them; protects open-PR and
 #                                within-grace WIP. Never touches origin.
 #   git-sync                    — pull --ff-only + fetch --tags + local prune
@@ -768,18 +859,14 @@ _git_default_branch() {
   echo "${d:-master}"
 }
 
-# The ref against which "captured" (merged) is judged: prefer origin/<default>,
-# else the local <default>. Empty if neither exists.
-_git_capture_ref() {
-  local default="$1"
-  if git rev-parse --verify --quiet "refs/remotes/origin/$default" >/dev/null; then
-    echo "refs/remotes/origin/$default"
-  elif git rev-parse --verify --quiet "refs/heads/$default" >/dev/null; then
-    echo "refs/heads/$default"
-  fi
-}
+# _git_capture_ref is DELETED with the verdict function that was its only caller.
+# It fell back to the LOCAL <default> branch when origin/<default> was missing — so
+# with an unfetchable origin, "merged" was judged against a possibly-stale local
+# master, and a branch could be declared captured against a ref that had itself
+# never landed. Proof is now taken against refs/remotes/origin/<default> or not at
+# all: if origin cannot be seen, _git_landed_preflight fails and nothing is deleted.
 
-# Grace window (seconds) before an uncaptured LOCAL branch/worktree is prunable.
+# Grace window (seconds) before an unprovable DETACHED worktree is prunable.
 _git_prune_min_age() { echo "${GIT_PRUNE_MIN_AGE:-7200}"; }
 
 # Grace window (seconds) before a no-PR REMOTE branch is prunable — longer than
@@ -812,60 +899,50 @@ _git_ref_age_secs() {
 _git_worktree_is_live() {
   local wt="$1" locked="$2" check_age="${3:-1}"
   [[ "$locked" == "1" ]] && return 0
-  [[ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]] && return 0
+
+  # FAIL CLOSED on the dirty check. `git status` writes NOTHING to stdout when it
+  # ERRORS (missing path, broken gitdir, unreadable tree) — identical output to a
+  # perfectly clean tree. Testing only for empty stdout read "I could not look" as
+  # "there is nothing there", which is the exact fail-open shape that let RVT-2881
+  # delete live work. Cannot prove it clean => treat it as live.
+  local status_out status_rc
+  status_out=$(git -C "$wt" status --porcelain 2>/dev/null)
+  status_rc=$?
+  (( status_rc != 0 )) && return 0
+  [[ -n "$status_out" ]] && return 0
+
   if (( check_age )); then
     local ct min
     ct=$(git -C "$wt" log -1 --format=%ct HEAD 2>/dev/null)
-    if [[ -n "$ct" ]]; then
-      min=$(_git_prune_min_age)
-      (( $(date +%s) - ct < min )) && return 0
-    fi
+    # Unresolvable age is not "old enough to reap" — it is unknown. Keep.
+    [[ -z "$ct" ]] && return 0
+    min=$(_git_prune_min_age)
+    (( $(date +%s) - ct < min )) && return 0
   fi
   return 1
 }
 
-# Emit "<STATE>\t<headRefName>" for every PR (all states). One gh call; the
-# result is cached by callers and passed to _git_branch_prune_verdict. Empty if
-# gh is unavailable — callers then treat every branch as PR-less (age-gated),
-# which errs toward protecting young work rather than deleting it.
-_git_pr_branch_states() {
-  gh pr list --state all --limit 500 --json state,headRefName \
-    -q '.[] | .state + "\t" + .headRefName' 2>/dev/null
-}
-
-# Classify a local branch for pruning. Echoes exactly one verdict:
-#   deletable-captured — merged into default, or head branch has a closed/merged PR
-#   protect-open       — head branch has an OPEN PR (keep)
-#   deletable-old      — uncaptured, last commit past the grace window
-#   protect-young      — uncaptured, last commit within the grace window (keep)
-# Args: <branch> <pr-state-cache> <default-branch>
-_git_branch_prune_verdict() {
-  local branch="$1" pr_cache="$2" default="$3"
-
-  local cap_ref
-  cap_ref=$(_git_capture_ref "$default")
-  if [[ -n "$cap_ref" ]] \
-     && git merge-base --is-ancestor "refs/heads/$branch" "$cap_ref" 2>/dev/null; then
-    printf 'deletable-captured'; return 0
-  fi
-
-  local state
-  state=$(printf '%s\n' "$pr_cache" | awk -F'\t' -v b="$branch" '$2 == b {print $1; exit}')
-  if [[ -n "$state" ]]; then
-    [[ "$state" == "OPEN" ]] && { printf 'protect-open'; return 0; }
-    printf 'deletable-captured'; return 0
-  fi
-
-  local age min
-  age=$(_git_ref_age_secs "refs/heads/$branch")
-  min=$(_git_prune_min_age)
-  if [[ -z "$age" ]] || (( age >= min )); then
-    printf 'deletable-old'
-  else
-    printf 'protect-young'
-  fi
-  return 0
-}
+# _git_pr_branch_states and _git_branch_prune_verdict are DELETED (RVT-2886).
+#
+# The verdict function carried a SECOND, weaker answer to "is this safe to
+# destroy" while git-prune-gone carried the landed-proof answer. Two predicates
+# for one safety question is how the 2026-07-13 two-step existed. Both of its
+# delete verdicts were unsound, and neither was a near-miss:
+#
+#   deletable-old — "no PR, and the last commit is older than 2h" → `git branch -D`.
+#     Age is not proof of anything. This force-deleted a NEVER-PUSHED branch with
+#     unmerged commits after two hours. git-prune-gone could not even SEE that
+#     branch (no upstream, so never `[gone]`) — so the everyday `git-sync`, which
+#     calls this path with no preview and no confirmation, was strictly MORE
+#     dangerous than the tool this ticket was filed against.
+#
+#   deletable-captured — treated ANY non-OPEN PR as captured, including CLOSED.
+#     A closed-unmerged PR is the strongest available signal that work was
+#     abandoned WITHOUT landing. It was read as permission to force-delete.
+#
+# Branch deletion now goes through _git_branch_landed_proof and nothing else.
+# Age survives ONLY where it is honest: as a grace window on DETACHED worktrees,
+# which carry no branch ref and so cannot be proof-checked at all.
 
 # List remote branches on origin that have no open PR (and aren't the default).
 # Excludes origin/HEAD and the default branch.
@@ -909,56 +986,63 @@ _git_local_orphans() {
 #
 # Usage:
 #   git-prune-orphans                  — local only (default; safe in shared repos)
-#   git-prune-orphans -r               — remote (all no-PR origin branches, 6h-gated), then local
-#   git-prune-orphans -f               — force LOCAL prune: also delete branches with an
-#                                        open PR or still within the grace window
+#   git-prune-orphans -r               — remote (proven-landed, 6h-gated), then local
+#   git-prune-orphans -f               — drop the AGE grace on detached worktrees
+#   git-prune-orphans -y/--yes         — skip the confirmation prompt
 #   git-prune-orphans --dry-run        — works with any mode
 #
-# `-r` enables remote cleanup; `-R`/`--remote` are accepted aliases (there is a
-# single remote mode now). No confirmation prompts. Remote prune runs before
-# local so the local pass surfaces branches whose remote was just deleted.
+# `-r` enables remote cleanup; `-R`/`--remote` are accepted aliases. Remote prune
+# runs before local so the local pass surfaces branches whose remote was just
+# deleted. Both passes PREVIEW what they will destroy and confirm before doing it.
 #
-# `-f`/`--force` overrides the open-PR and grace-window holds for the LOCAL prune
-# only (so you can reap a branch whose PR is already up). It still refuses to
-# force-remove a worktree with uncommitted work or an explicit lock — force is
-# not a licence to discard live work. Remote deletion stays PR-/age-gated.
+# `-f`/`--force` no longer forces anything into deletion. It used to override the
+# open-PR and grace-window holds — i.e. it force-deleted branches with an OPEN PR.
+# Under landed-proof there is nothing left for it to override: a branch is deleted
+# because its work is PROVEN to be on origin, and no flag can turn "I cannot prove
+# this landed" into "destroy it". It now drops only the AGE grace on detached
+# worktrees, which have no branch ref to prove anything about. It has never been,
+# and is not, a licence to discard live work: locked and dirty worktrees are
+# untouchable under every flag.
 git-prune-orphans() {
-  local do_remote=0 dry_run=0 force=0
+  local do_remote=0 dry_run=0 force=0 assume_yes=0
   for arg in "$@"; do
     case "$arg" in
       -r|-R|--remote|--all-remote) do_remote=1 ;;
       -f|--force) force=1 ;;
+      -y|--yes)   assume_yes=1 ;;
       --dry-run) dry_run=1 ;;
       *) echo "Unknown arg: $arg" >&2; return 2 ;;
     esac
   done
 
   local fwd_args=()
-  (( dry_run )) && fwd_args+=(--dry-run)
-  (( force ))   && fwd_args+=(--force)
+  (( dry_run ))   && fwd_args+=(--dry-run)
+  (( force ))     && fwd_args+=(--force)
+  (( assume_yes )) && fwd_args+=(--yes)
 
-  (( do_remote )) && { _git_prune_remote_orphans "$dry_run" || return 1; }
+  (( do_remote )) && { _git_prune_remote_orphans "$dry_run" "$assume_yes" || return 1; }
 
   _git_prune_local_orphans "${fwd_args[@]}"
 }
 
-# Remote prune (helper for git-prune-orphans -r). Deletes origin/<b> when BOTH:
-#   - <b> has no open PR (a remote orphan, per _git_remote_orphans)
-#   - origin/<b>'s last commit is older than GIT_PRUNE_REMOTE_MIN_AGE (default 6h)
-# NOT coupled to local branches — a remote-only branch is fair game once past the
-# 6h window. Unknown remote age → held back (fail-safe: never delete shared state
-# we can't date). Snapshot is taken before any mutation.
+# Remote prune (helper for git-prune-orphans -r). Deletes origin/<b> only when its
+# work is PROVEN landed on origin (_git_remote_landed_proof) AND origin/<b>'s last
+# commit is older than GIT_PRUNE_REMOTE_MIN_AGE (default 6h). Unknown age or any
+# unprovable state → held back. This deletes SHARED state that may be the only
+# surviving copy, so it gets proof first and the age window on top.
 _git_prune_remote_orphans() {
-  local dry_run="$1"
+  local dry_run="$1" assume_yes="${2:-0}"
 
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
     echo "Error: not in a git repo" >&2
     return 1
   }
 
-  git fetch --prune >/dev/null 2>&1 || true
-
-  local min candidates
+  # Fail closed: deleting a REMOTE ref destroys the copy of last resort. If origin
+  # cannot be fetched or named, nothing is provable and nothing is deleted.
+  local preflight default gh_ok min candidates
+  preflight=$(_git_landed_preflight "git-prune-orphans -r") || return 1
+  IFS=$'\t' read -r default gh_ok <<< "$preflight"
   min=$(_git_prune_remote_min_age)
   candidates=$(_git_remote_orphans | sort -u)
 
@@ -967,19 +1051,35 @@ _git_prune_remote_orphans() {
     return 0
   fi
 
-  # Age-gate each candidate on its remote ref's last commit.
-  local eligible="" held="" branch age
+  # PROOF, then age. The old gate was "no open PR, and 6h old" — both are the
+  # ABSENCE of a signal, and on the REMOTE that is the most dangerous place to
+  # reason from absence: origin is the durable copy. Under the session-scoped
+  # worktree convention (RVT-2913) work that must survive is pushed to origin
+  # precisely BECAUSE it is safe there, and this function was deleting exactly
+  # that population — a pushed, PR-less, >6h branch is the *canonical* rescue
+  # branch. It would have destroyed the 20 fork-bomb rescue branches outright.
+  #
+  # Now: delete origin/<b> only when its work is PROVEN landed. The 6h window is
+  # kept as a second, subordinate hold — proof is necessary, age is not sufficient.
+  local eligible="" held="" branch age verdict
   while IFS= read -r branch; do
     [[ -z "$branch" ]] && continue
+
+    verdict=$(_git_remote_landed_proof "$branch" "$default" "$gh_ok")
+    if [[ "$verdict" != "landed" ]]; then
+      held+="  origin/$branch  (${verdict#keep|})"$'\n'
+      continue
+    fi
+
     age=$(_git_ref_age_secs "refs/remotes/origin/$branch")
     if [[ -n "$age" ]] && (( age >= min )); then
       eligible+="$branch"$'\n'
     else
-      held+="  origin/$branch  ($( [[ -n "$age" ]] && echo "$((age / 60))m < $((min / 60))m grace" || echo "age unknown" ))"$'\n'
+      held+="  origin/$branch  ($( [[ -n "$age" ]] && echo "$((age / 60))m < $((min / 60))m grace" || echo "age unknown — fail closed" ))"$'\n'
     fi
   done <<< "$candidates"
 
-  [[ -n "$held" ]] && { echo "Held back (within grace window):"; printf '%s' "$held"; }
+  [[ -n "$held" ]] && { echo "Held back (not proven landed, or within grace):"; printf '%s' "$held"; }
 
   eligible=$(printf '%s' "$eligible" | awk 'NF')
   if [[ -z "$eligible" ]]; then
@@ -990,13 +1090,25 @@ _git_prune_remote_orphans() {
   local count
   count=$(printf '%s\n' "$eligible" | wc -l | tr -d ' ')
 
+  # THE LIST SHOWN IS THE LIST DELETED — and this one deletes shared state, so it
+  # is shown and confirmed even when the local pass would not bother.
+  echo "Will DELETE $count remote branch(es) on origin (proven landed, past ${min}s grace):"
+  printf '%s\n' "$eligible" | sed 's/^/  /'
+
   if (( dry_run )); then
-    echo "Dry run: would delete $count remote branch(es) on origin (no open PR, past ${min}s grace):"
-    printf '%s\n' "$eligible" | sed 's/^/  /'
+    echo "--dry-run: nothing deleted."
     return 0
   fi
 
-  echo "Deleting $count remote branch(es) on origin (no open PR, past ${min}s grace):"
+  if (( ! assume_yes )); then
+    local reply
+    read -q "reply?Delete these $count REMOTE branch(es) on origin? [y/N] "
+    echo
+    if [[ "$reply" != [yY] ]]; then
+      echo "Aborted. Nothing deleted."
+      return 0
+    fi
+  fi
 
   local deleted=0 failed=0
   while IFS= read -r branch; do
@@ -1023,26 +1135,30 @@ _git_prune_remote_orphans() {
 #      and to remote-branch checks, so categories 1 and 2 miss them)
 #
 # Each candidate is gated by the deletion policy (see § header):
-#   - branch-keyed (1 & 2): _git_branch_prune_verdict decides. Captured (merged
-#     or closed/merged PR) → delete; OPEN PR → protect; uncaptured → delete only
-#     past the grace window, else protect. On delete, remove its worktree first.
-#   - detached worktrees (3): age-gated on the worktree HEAD — removed only past
-#     the grace window (protects a live agent worktree that just died).
+#   - branch-keyed (1 & 2): DELETED ONLY ON POSITIVE PROOF OF LANDING
+#     (_git_branch_landed_proof — merged into origin/<default>, or a MERGED PR on
+#     origin). Anything unproven, INCLUDING every error path, is kept. Age plays no
+#     part: a branch that is 2h old and unlanded is unlanded.
+#   - detached worktrees (3): no branch ref exists, so landing cannot be proved or
+#     disproved. These stay age-gated — the one place a grace window is honest —
+#     and a dirty or locked one is never touched at any age.
 # The main worktree's current checkout is treated as a non-worktree case.
 #
-# This function NEVER pushes to origin. For remote cleanup use `git-prune-orphans
-# -r` (no-PR origin branches, 6h-gated).
+# This function NEVER pushes to origin. For remote cleanup use `git-prune-orphans -r`.
 #
 # Usage:
-#   _git_prune_local_orphans            — delete (no confirmation; runs immediately)
+#   _git_prune_local_orphans            — preview, then confirm before deleting
 #   _git_prune_local_orphans --dry-run  — print the plan (delete vs protected) and exit
-#   _git_prune_local_orphans --force    — also reap open-PR / within-grace branches
-#                                         (still protects dirty/locked worktrees)
+#   _git_prune_local_orphans --yes      — skip the confirmation prompt
+#   _git_prune_local_orphans --force    — drop the AGE grace on detached worktrees only.
+#                                         It can NOT force an unlanded branch to be
+#                                         deleted, and never unlocks a worktree.
 _git_prune_local_orphans() {
-  local dry_run=0 _force=0
+  local dry_run=0 _force=0 assume_yes=0
   for arg in "$@"; do
     case "$arg" in
       --dry-run)  dry_run=1 ;;
+      --yes|-y)   assume_yes=1 ;;
       --force|-f) _force=1 ;;
       *) echo "Unknown arg: $arg" >&2; return 2 ;;
     esac
@@ -1053,11 +1169,12 @@ _git_prune_local_orphans() {
     return 1
   }
 
-  git fetch --prune >/dev/null 2>&1 || true
-
-  local default pr_cache min
-  default=$(_git_default_branch)
-  pr_cache=$(_git_pr_branch_states)
+  # Fail closed: if origin cannot be fetched or its default branch named, nothing
+  # can be PROVEN landed, so nothing may be deleted. The old code ran
+  # `git fetch --prune ... || true` and then deleted on a stale/absent view.
+  local preflight default gh_ok min
+  preflight=$(_git_landed_preflight git-prune-orphans) || return 1
+  IFS=$'\t' read -r default gh_ok <<< "$preflight"
   min=$(_git_prune_min_age)
 
   # Candidates: union of (local branches with no remote) and (branches checked
@@ -1125,41 +1242,32 @@ _git_prune_local_orphans() {
   local del_branches="" del_detached="" protect_list=""
   # NB: _wt/_lk declared here, NOT inside the loop — a bare `local x` on an
   # already-set var re-prints "x=value" in zsh (a display op), leaking to stdout.
-  local branch verdict age _wt _lk
+  local branch verdict _wt _lk
   if [[ -n "$branches" ]]; then
     while IFS= read -r branch; do
       [[ -z "$branch" ]] && continue
-      verdict=$(_git_branch_prune_verdict "$branch" "$pr_cache" "$default")
-      # --force overrides the PR-open and grace-window holds (but never the
-      # dirty/locked worktree guard below).
-      if (( _force )); then
-        case "$verdict" in
-          protect-open)  verdict=deletable-captured ;;
-          protect-young) verdict=deletable-old ;;
-        esac
+
+      # PROOF FIRST. Not proven landed → kept, whatever its age, PR state, or
+      # worktree status. --force cannot override this; there is no flag that
+      # turns "I cannot prove this landed" into "destroy it".
+      verdict=$(_git_branch_landed_proof "$branch" "$default" "$gh_ok")
+      if [[ "$verdict" != "landed" ]]; then
+        protect_list+="  $branch  (${verdict#keep|})"$'\n'
+        continue
       fi
-      case "$verdict" in
-        deletable-captured|deletable-old)
-          # Live-worktree guard: never reap a branch checked out in an active
-          # secondary worktree (locked / dirty / young HEAD) — even when its PR
-          # merged (captured, which otherwise skips the grace window). This is
-          # the fix for concurrent git-sync wiping a still-running agent. Under
-          # --force the young-HEAD hold is dropped (check_age=0), but dirty and
-          # locked worktrees stay protected — force never discards live work.
-          read -r _wt _lk < <(_git_wt_lookup "$branch")
-          if [[ -n "$_wt" ]] && _git_worktree_is_live "$_wt" "$_lk" $(( _force ? 0 : 1 )); then
-            protect_list+="  $branch  (live worktree: $_wt)"$'\n'
-          elif [[ "$verdict" == "deletable-captured" ]]; then
-            del_branches+="$branch"$'\t'"captured"$'\n'
-          else
-            del_branches+="$branch"$'\t'"uncaptured, past grace"$'\n'
-          fi
-          ;;
-        protect-open)       protect_list+="  $branch  (open PR)"$'\n' ;;
-        protect-young)
-          age=$(_git_ref_age_secs "refs/heads/$branch")
-          protect_list+="  $branch  (unpushed WIP, $((age / 60))m < $((min / 60))m grace)"$'\n' ;;
-      esac
+
+      # Landed, but still checked out in a live worktree: the BRANCH is safe to
+      # delete, the DIRECTORY is not. A locked or dirty worktree is an agent
+      # saying "this is mine and I am using it" — skip both. --force does not
+      # relax this; it never did discard dirty/locked work, and now it cannot
+      # relax the age hold into one either.
+      read -r _wt _lk < <(_git_wt_lookup "$branch")
+      if [[ -n "$_wt" ]] && _git_worktree_is_live "$_wt" "$_lk" $(( _force ? 0 : 1 )); then
+        protect_list+="  $branch  (live worktree: $_wt)"$'\n'
+        continue
+      fi
+
+      del_branches+="$branch"$'\t'"proven landed on origin"$'\n'
     done <<< "$branches"
   fi
 
@@ -1174,7 +1282,12 @@ _git_prune_local_orphans() {
         continue
       fi
       dage=$(_git_ref_age_secs "$dhead")
-      if (( _force )) || [[ -z "$dage" ]] || (( dage >= min )); then
+      # An UNKNOWN age is not an old age. The old test read empty (= the age lookup
+      # FAILED) as eligible-for-deletion, so an unreadable worktree was reaped
+      # precisely because it could not be inspected. Unknown → keep.
+      if [[ -z "$dage" ]]; then
+        protect_list+="  $dpath  (detached worktree, age unresolvable — fail closed)"$'\n'
+      elif (( _force )) || (( dage >= min )); then
         del_detached+="$dpath"$'\t'"$dlk"$'\n'
       else
         protect_list+="  $dpath  (detached worktree, $((dage / 60))m < $((min / 60))m grace)"$'\n'
@@ -1203,6 +1316,27 @@ _git_prune_local_orphans() {
     return 0
   fi
 
+  # THE LIST SHOWN IS THE LIST DELETED. Printed before anything is destroyed, and
+  # the loops below iterate exactly these two lists. The old code showed only what
+  # it PROTECTED and never showed what it was about to destroy — it just narrated
+  # each deletion as it happened, which is a receipt, not a preview.
+  echo "Will DELETE:"
+  [[ -n "$del_branches" ]] && printf '%s' "$del_branches" \
+    | awk -F'\t' 'NF { print "  branch " $1 "  (" $2 ")" }'
+  [[ -n "$del_detached" ]] && printf '%s' "$del_detached" \
+    | awk -F'\t' 'NF { print "  detached worktree " $1 }'
+
+  if (( ! assume_yes )); then
+    local reply
+    read -q "reply?Proceed? [y/N] "
+    echo
+    if [[ "$reply" != [yY] ]]; then
+      echo "Aborted. Nothing deleted."
+      unset -f _git_wt_lookup
+      return 0
+    fi
+  fi
+
   # wt_path/locked hoisted out of the loop — a bare in-loop `local` re-prints
   # "name=value" to stdout in zsh once the var is set (see classify loop above).
   local deleted=0 failed=0 wt_removed=0 wt_failed=0 reason wt_path locked
@@ -1211,18 +1345,41 @@ _git_prune_local_orphans() {
       [[ -z "$branch" ]] && continue
       read -r wt_path locked < <(_git_wt_lookup "$branch")
       if [[ -n "$wt_path" ]]; then
+        # A LOCK IS A VETO, NOT A FORMALITY. The old code unlocked the worktree and
+        # then force-removed it — defeating the one mechanism an agent has to say
+        # "do not touch this". That is the pattern that destroyed 22 worktrees on
+        # 2026-07-13 (RVT-2881). There is no `git worktree unlock` in this file any
+        # more. Locked → report and skip, including the branch.
         if [[ "$locked" == "1" ]]; then
-          echo "Unlocking worktree: $wt_path"
-          git worktree unlock "$wt_path" || true
+          echo "  SKIP     $branch — worktree is LOCKED: $wt_path" >&2
+          echo "           (a lock means an agent is using it; unlock it yourself if you disagree)" >&2
+          failed=$((failed + 1))
+          continue
         fi
-        echo "Removing worktree: $wt_path"
-        git worktree remove --force "$wt_path" || true
+        # No --force: git's own refusal to remove a dirty worktree is a real second
+        # net, and `--force` existed only to defeat it. No `|| true`: the failure of
+        # a destructive command is signal. If the worktree will not come out, we do
+        # NOT go on to delete the branch it is holding.
+        echo "  removing worktree $wt_path"
+        if ! git worktree remove "$wt_path"; then
+          echo "  SKIP     $branch — could not remove its worktree $wt_path" >&2
+          echo "           (uncommitted work, or the directory is busy — nothing was deleted)" >&2
+          wt_failed=$((wt_failed + 1))
+          failed=$((failed + 1))
+          continue
+        fi
+        wt_removed=$((wt_removed + 1))
       fi
-      echo "Deleting branch: $branch ($reason)"
+
+      # -D, not -d, and ONLY because landing was already PROVEN above. A squash-
+      # merged branch's commits are not ancestors of master, so `-d` would refuse it
+      # and the tool would never clean anything. The force is safe here for exactly
+      # one reason: the proof, not the flag.
       if git branch -D "$branch" 2>/dev/null; then
+        echo "  deleted  $branch ($reason)"
         deleted=$((deleted + 1))
       else
-        echo "  failed (likely current branch in some worktree)" >&2
+        echo "  FAILED   $branch (still checked out somewhere, or the ref is locked)" >&2
         failed=$((failed + 1))
       fi
     done <<< "$del_branches"
@@ -1233,47 +1390,57 @@ _git_prune_local_orphans() {
     while IFS=$'\t' read -r dpath dlk; do
       [[ -z "$dpath" ]] && continue
       if [[ "$dlk" == "1" ]]; then
-        echo "Unlocking worktree: $dpath"
-        git worktree unlock "$dpath" || true
+        echo "  SKIP     detached worktree is LOCKED: $dpath" >&2
+        wt_failed=$((wt_failed + 1))
+        continue
       fi
-      echo "Removing detached worktree: $dpath"
-      if git worktree remove --force "$dpath" 2>/dev/null; then
+      if git worktree remove "$dpath"; then
+        echo "  removed  detached worktree $dpath"
         wt_removed=$((wt_removed + 1))
       else
-        echo "  failed to remove $dpath" >&2
+        echo "  FAILED   could not remove detached worktree $dpath (uncommitted work?)" >&2
         wt_failed=$((wt_failed + 1))
       fi
     done <<< "$del_detached"
   fi
 
   unset -f _git_wt_lookup
-  echo "==> Deleted $deleted branch(es)$( (( failed > 0 )) && echo "; $failed failed" ); removed $wt_removed detached worktree(s)$( (( wt_failed > 0 )) && echo "; $wt_failed failed" )."
+  echo "==> Deleted $deleted branch(es)$( (( failed > 0 )) && echo "; $failed skipped/failed" ); removed $wt_removed worktree(s)$( (( wt_failed > 0 )) && echo "; $wt_failed skipped/failed" )."
 }
 
 # Batch-merge every open PR: folded into `git-merge-pr-clean --all` (squash-admin
 # per PR via the scoped engine, then -l/-r/-R orphan sweep). See that function.
 
 # One-shot repo sync + cleanup — the daily-driver combo. Fast-forward pulls the
-# current branch, refreshes tags, then prunes captured/aged-out local orphans.
+# current branch, refreshes tags, then prunes local branches PROVEN landed on origin.
 # Safe in shared repos: the default never deletes anything on origin.
 # Aliased to `gsp` (see aliases.zsh) so it's a 3-keystroke, tab-free invocation.
 #
+# THIS IS THE MOST DANGEROUS ENTRY POINT IN THIS FILE, because it is the one you type
+# without thinking. Until RVT-2886 it reached a pruner that force-deleted any branch
+# with no PR whose last commit was >2h old — no preview, no confirmation. A never-
+# pushed WIP branch two hours old was destroyed by a command whose name is "sync".
+# It now deletes a branch only on POSITIVE PROOF the work is on origin, and shows you
+# the list and asks before it does. See the "Orphan pruning" § header.
+#
 #   git-sync            — pull --ff-only (if upstream) + fetch --tags --prune + local prune
-#   git-sync -r         — also run the remote prune (no-PR origin branches, 6h-gated)
-#   git-sync -f         — force the local prune: reap branches with an open PR or
-#                         still within grace (dirty/locked worktrees stay protected)
+#   git-sync -r         — also run the remote prune (proven-landed, 6h-gated)
+#   git-sync -f         — drop the AGE grace on detached worktrees. It can NOT force an
+#                         unlanded branch to be deleted (locked/dirty worktrees, and
+#                         anything unproven, stay protected under every flag).
+#   git-sync -y         — skip the confirmation prompt
 #   git-sync --dry-run  — still syncs, then previews the prune without deleting
 #
-# Grace windows: GIT_PRUNE_MIN_AGE (local, default 7200s = 2h) and
-# GIT_PRUNE_REMOTE_MIN_AGE (remote, default 21600s = 6h); see the "Orphan
-# pruning" § header.
+# Grace windows: GIT_PRUNE_MIN_AGE (detached worktrees, default 7200s = 2h) and
+# GIT_PRUNE_REMOTE_MIN_AGE (remote, default 21600s = 6h).
 git-sync() {
-  local dry_run=0 remote=0 force=0 arg
+  local dry_run=0 remote=0 force=0 assume_yes=0 arg
   for arg in "$@"; do
     case "$arg" in
       --dry-run)               dry_run=1 ;;
       -r|-R|--remote)          remote=1 ;;
       -f|--force)              force=1 ;;
+      -y|--yes)                assume_yes=1 ;;
       *) echo "Unknown arg: $arg" >&2; return 2 ;;
     esac
   done
@@ -1293,9 +1460,10 @@ git-sync() {
   git fetch --tags --prune || true
 
   local -a prune_args=()
-  (( remote ))  && prune_args+=(-r)
-  (( force ))   && prune_args+=(-f)
-  (( dry_run )) && prune_args+=(--dry-run)
+  (( remote ))     && prune_args+=(-r)
+  (( force ))      && prune_args+=(-f)
+  (( assume_yes )) && prune_args+=(-y)
+  (( dry_run ))    && prune_args+=(--dry-run)
   echo "==> Pruning orphans"
   git-prune-orphans "${prune_args[@]}"
 }
