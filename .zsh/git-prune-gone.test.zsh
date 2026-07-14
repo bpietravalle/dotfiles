@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# Regression tests for git-prune-gone (RVT-2886).
+# Regression tests for git-prune-gone.
 #   zsh .zsh/git-prune-gone.test.zsh
 #
 # Every test builds a THROWAWAY repo (a bare "origin" + a clone) under a temp dir and
@@ -12,7 +12,7 @@
 #      [gone] means "the remote ref is missing", never "the work landed".
 #   2. Every fail-closed path KEEPS: fetch failure, unresolvable origin/HEAD, gh absent,
 #      gh erroring. An error is not proof, and the error case IS the dangerous population
-#      (RVT-2881 read `git log @{u}..` exiting 128 with empty stdout as "safe to delete").
+#      (a prior bug read `git log @{u}..` exiting 128 with empty stdout as "safe to delete").
 #   3. THE LIST SHOWN IS THE LIST DELETED — asserted by diffing the two.
 #   4. There is no worktree skip-list, and none is needed: git itself refuses to delete a
 #      branch checked out in a worktree.
@@ -114,7 +114,7 @@ assert_has "2a merged branch is deleted"      "$OUT" "deleted  feature"
 assert     "2b only master remains"           "$(branches "$R")" "master "
 
 # ── 3. Never-pushed branch WITH COMMITS is KEPT (no upstream = no proof) ──────
-# The population RVT-2881 destroyed by reading `git log @{u}..`'s exit-128 as "safe".
+# The population a prior bug destroyed by reading `git log @{u}..`'s exit-128 as "safe".
 R=$(new_repo neverpushed)
 git -C "$R" checkout -q -b local-only
 git -C "$R" commit -q --allow-empty -m "never pushed anywhere"

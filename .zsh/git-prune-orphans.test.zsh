@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# Regression tests for the orphan pruners (RVT-2886, second surface).
+# Regression tests for the orphan pruners (second surface).
 #   zsh .zsh/git-prune-orphans.test.zsh
 #
 # git-prune-gone was fixed first (see git-prune-gone.test.zsh). It was not the whole
@@ -21,7 +21,7 @@
 #      was abandoned unlanded as permission to force-delete it.
 #   3. A LOCKED worktree is never removed and never unlocked. The old code ran
 #      `git worktree unlock` and then `git worktree remove --force` — defeating the one
-#      mechanism an agent has to say "this is mine" (RVT-2881: 22 worktrees).
+#      mechanism an agent has to say "this is mine" (a prior incident deleted 22 worktrees).
 #   4. A REMOTE branch that is pushed, PR-less and old is KEPT. The old remote gate
 #      deleted exactly that — the canonical shape of a rescue branch, on the copy of
 #      last resort.
@@ -200,7 +200,7 @@ git -C "$R" commit -q --allow-empty -m "the only copy of this work"
 git -C "$R" push -q -u origin rescue-42
 git -C "$R" checkout -q master
 gh_no_pr                                     # no open PR, and no merged PR
-OUT=$(cd "$R" && PATH="$GH_PATH" _git_prune_remote_orphans 0 1 2>&1)
+OUT=$(cd "$R" && PATH="$GH_PATH" _git_prune_remote_orphans 0 2>&1)
 assert_has "5a unlanded remote branch is HELD"    "$OUT" "Held back"
 assert_not "5b it is not deleted from origin"     "$OUT" "Deleting origin/rescue-42"
 assert     "5c it still exists on origin"  "$(remote_branches "$R")" "master rescue-42 "
@@ -218,7 +218,7 @@ git -C "$R" push -q -f origin done-work      # ...and re-push so origin carries 
 git -C "$R" checkout -q master
 git -C "$R" merge -q done-work -m merge2 2>/dev/null || true
 git -C "$R" push -q origin master
-OUT=$(cd "$R" && PATH="$GH_PATH" _git_prune_remote_orphans 0 1 2>&1)
+OUT=$(cd "$R" && PATH="$GH_PATH" _git_prune_remote_orphans 0 2>&1)
 assert_has "5d a proven-landed remote branch is deleted" "$OUT" "Deleting origin/done-work"
 assert     "5e origin is cleaned"  "$(remote_branches "$R")" "master "
 
