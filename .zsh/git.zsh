@@ -926,6 +926,8 @@ git-prune-orphans() {
     esac
   done
 
+  (( force )) && echo "note: -f only drops the detached-worktree age grace; it does NOT force unlanded branches. For a full local wipe use git-local-clean (glc)."
+
   local fwd_args=()
   (( dry_run ))     && fwd_args+=(--dry-run)
   (( force ))       && fwd_args+=(--force)
@@ -1354,6 +1356,159 @@ git-sync() {
   (( force ))       && prune_args+=(-f)
   (( interactive )) && prune_args+=(-i)
   (( dry_run ))     && prune_args+=(--dry-run)
+  (( force )) && echo "note: -f only drops the detached-worktree age grace; it does NOT force unlanded branches. For a full local wipe use git-local-clean (glc)."
   echo "==> Pruning orphans"
   git-prune-orphans "${prune_args[@]}"
+}
+
+# ─── Full local reset (NO landed-proof) ──────────────────────────────────────
+#
+# The deliberate override git-sync refuses to be: deletes EVERY local branch +
+# secondary worktree except the default and current checkout, abandoned/unlanded
+# included, with no proof-of-landing check. Local only — never touches origin, so the
+# pushed copy survives. Kept separate so the daily driver stays safe-by-default.
+# A DIRTY or LOCKED worktree is still protected (unrecoverable loss); -f overrides.
+#
+#   git-local-clean            preview + confirm, then delete (protects dirty/locked)
+#   git-local-clean -f         also blow away dirty/locked worktrees and their branches
+#   git-local-clean -y         skip the confirmation prompt
+#   git-local-clean --dry-run  print the plan, delete nothing
+#   git-local-clean --keep B   spare branch B (repeatable)
+git-local-clean() {
+  local dry_run=0 force=0 assume_yes=0
+  local -a keep_extra=()
+  while (( $# )); do
+    case "$1" in
+      -n|--dry-run) dry_run=1 ;;
+      -f|--force)   force=1 ;;
+      -y|--yes)     assume_yes=1 ;;
+      --keep)       shift; [[ -n "$1" ]] && keep_extra+=("$1") ;;
+      -h|--help)
+        echo "usage: git-local-clean [--dry-run|-n] [-f|--force] [-y|--yes] [--keep B]..."
+        echo "  Deletes all local branches + secondary worktrees except default/current."
+        echo "  No landed-proof, never touches origin. Dirty/locked protected unless -f."
+        return 0 ;;
+      *) echo "git-local-clean: unknown option '$1'" >&2; return 2 ;;
+    esac
+    shift
+  done
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "git-local-clean: not a git repository." >&2; return 1; }
+
+  local default; default=$(_git_default_branch)
+
+  local wt_info main_wt
+  wt_info=$(git worktree list --porcelain)
+  main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
+
+  # Switch the main worktree to default when it's on a clean non-default branch, so
+  # that branch becomes deletable; otherwise the current branch is protected as-is.
+  local main_branch
+  main_branch=$(git -C "$main_wt" symbolic-ref --short -q HEAD 2>/dev/null)
+  if [[ -n "$main_branch" && "$main_branch" != "$default" ]] \
+     && [[ -z "$(git -C "$main_wt" status --porcelain 2>/dev/null)" ]] \
+     && git -C "$main_wt" rev-parse --verify --quiet "refs/heads/$default" >/dev/null; then
+    if (( dry_run )); then
+      echo "Would switch main worktree $main_wt: $main_branch -> $default"
+      main_branch="$default"   # so the plan shows the branch it would leave as deletable
+    elif git -C "$main_wt" checkout "$default" >/dev/null 2>&1; then
+      echo "Switched main worktree to $default (was $main_branch)"
+      main_branch="$default"
+    fi
+  fi
+
+  # Protected branch set: default + main checkout + --keep. Branches held by a
+  # SKIPPED (dirty/locked) worktree get added below so we don't try to delete them.
+  local -A protect
+  protect[$default]=1
+  [[ -n "$main_branch" ]] && protect[$main_branch]=1
+  local b; for b in "${keep_extra[@]}"; do protect[$b]=1; done
+
+  # Classify secondary worktrees in one pass. remove_wt: "<path>\t<locked>".
+  # NB: no `local path` — in zsh that clobbers $PATH (path is the array form of PATH).
+  local remove_wt="" skip_wt="" awkout wtp lk brc dirty
+  awkout=$(echo "$wt_info" | awk -v main="$main_wt" '
+    BEGIN { RS = ""; FS = "\n" }
+    {
+      p = ""; lk = 0; br = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^worktree /)                 p  = substr($i, 10)
+        else if ($i ~ /^locked/)               lk = 1
+        else if ($i ~ /^branch refs\/heads\//) br = substr($i, 19)
+      }
+      if (p != "" && p != main) print p "\t" lk "\t" br
+    }')
+  while IFS=$'\t' read -r wtp lk brc; do
+    [[ -z "$wtp" ]] && continue
+    dirty=""
+    [[ -n "$(git -C "$wtp" status --porcelain 2>/dev/null)" ]] && dirty=1
+    if (( ! force )) && { [[ "$lk" == "1" ]] || [[ -n "$dirty" ]]; }; then
+      skip_wt+="  $wtp  ($( [[ "$lk" == 1 ]] && echo locked || echo dirty ) — kept; use -f)"$'\n'
+      [[ -n "$brc" ]] && protect[$brc]=1
+    else
+      remove_wt+="$wtp"$'\t'"$lk"$'\n'
+    fi
+  done <<< "$awkout"
+
+  # Branches to delete: every local head not in the protected set.
+  local del_branches=""
+  while IFS= read -r b; do
+    [[ -z "$b" ]] && continue
+    [[ -n "${protect[$b]}" ]] && continue
+    del_branches+="$b"$'\n'
+  done < <(git for-each-ref --format='%(refname:short)' refs/heads)
+
+  del_branches=$(printf '%s' "$del_branches" | awk 'NF')
+  remove_wt=$(printf '%s' "$remove_wt" | awk 'NF')
+
+  if [[ -n "$skip_wt" ]]; then
+    echo "Protected worktrees (kept):"; printf '%s' "$skip_wt"
+  fi
+  if [[ -z "$del_branches" && -z "$remove_wt" ]]; then
+    echo "Nothing to clean — no extra local branches or secondary worktrees."
+    return 0
+  fi
+
+  echo "Will DELETE (local only, origin untouched):"
+  [[ -n "$remove_wt" ]]    && printf '%s\n' "$remove_wt"    | awk -F'\t' 'NF{print "  worktree " $1 ($2=="1"?"  (locked — will unlock)":"")}'
+  [[ -n "$del_branches" ]] && printf '%s\n' "$del_branches" | sed 's/^/  branch   /'
+
+  if (( dry_run )); then
+    echo "--dry-run: nothing deleted."
+    return 0
+  fi
+
+  if (( ! assume_yes )); then
+    local reply
+    read -q "reply?Proceed with the LOCAL nuke above? [y/N] "; echo
+    [[ "$reply" == [yY] ]] || { echo "Aborted. Nothing deleted."; return 0; }
+  fi
+
+  local wt_removed=0 wt_failed=0 deleted=0 failed=0
+  if [[ -n "$remove_wt" ]]; then
+    while IFS=$'\t' read -r wtp lk; do
+      [[ -z "$wtp" ]] && continue
+      [[ "$lk" == "1" ]] && git worktree unlock "$wtp" >/dev/null 2>&1
+      if git worktree remove $( (( force )) && echo --force ) "$wtp" 2>/dev/null; then
+        echo "  removed worktree $wtp"; wt_removed=$((wt_removed + 1))
+      else
+        echo "  FAILED  worktree $wtp (busy or dirty — rerun with -f)" >&2; wt_failed=$((wt_failed + 1))
+      fi
+    done <<< "$remove_wt"
+  fi
+
+  if [[ -n "$del_branches" ]]; then
+    while IFS= read -r b; do
+      [[ -z "$b" ]] && continue
+      if git branch -D "$b" 2>/dev/null; then
+        echo "  deleted branch $b"; deleted=$((deleted + 1))
+      else
+        echo "  FAILED  branch $b (still checked out?)" >&2; failed=$((failed + 1))
+      fi
+    done <<< "$del_branches"
+  fi
+
+  git worktree prune >/dev/null 2>&1
+  echo "==> Removed $wt_removed worktree(s)$( (( wt_failed )) && echo ", $wt_failed failed" ); deleted $deleted branch(es)$( (( failed )) && echo ", $failed failed" )."
 }
