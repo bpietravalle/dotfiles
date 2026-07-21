@@ -785,6 +785,9 @@ _git_merge_pr_clean_scoped() {
 #                                worktrees that hold them; protects open-PR and
 #                                within-grace WIP. Never touches origin.
 #   git-sync                    — pull --ff-only + fetch --tags + local prune
+#   git-local-clean (glc)       — OVERRIDE: wipe all local branches/worktrees, no proof
+#   git-remote-clean (grc)      — OVERRIDE: delete all no-open-PR origin branches, no
+#                                proof; 6h grace unless -f
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1511,4 +1514,120 @@ git-local-clean() {
 
   git worktree prune >/dev/null 2>&1
   echo "==> Removed $wt_removed worktree(s)$( (( wt_failed )) && echo ", $wt_failed failed" ); deleted $deleted branch(es)$( (( failed )) && echo ", $failed failed" )."
+}
+
+# ─── Full remote reset (NO landed-proof) ─────────────────────────────────────
+#
+# The remote sibling of git-local-clean: deletes EVERY origin branch with no open
+# PR, unlanded ones included, with no proof-of-landing check. This destroys the
+# copy of last resort, so three guards survive from the safe pruner: the default
+# branch is never a candidate, the PR host CLI must be authenticated (an empty PR
+# list is not proof of "no PRs" — fail closed), and the 6h age window still holds
+# recent branches unless -f. Local refs are never touched.
+#
+#   git-remote-clean            preview + confirm, then delete (6h grace held)
+#   git-remote-clean -f         also delete branches inside the 6h grace
+#   git-remote-clean -y         skip the confirmation prompt
+#   git-remote-clean --dry-run  print the plan, delete nothing
+#   git-remote-clean --keep B   spare branch B (repeatable)
+git-remote-clean() {
+  local dry_run=0 force=0 assume_yes=0
+  local -a keep_extra=()
+  while (( $# )); do
+    case "$1" in
+      -n|--dry-run) dry_run=1 ;;
+      -f|--force)   force=1 ;;
+      -y|--yes)     assume_yes=1 ;;
+      --keep)       shift; [[ -n "$1" ]] && keep_extra+=("$1") ;;
+      -h|--help)
+        echo "usage: git-remote-clean [--dry-run|-n] [-f|--force] [-y|--yes] [--keep B]..."
+        echo "  Deletes every origin branch with no open PR, landed or not."
+        echo "  -f drops the $(_git_prune_remote_min_age)s age grace. Local refs untouched."
+        return 0 ;;
+      *) echo "git-remote-clean: unknown option '$1'" >&2; return 2 ;;
+    esac
+    shift
+  done
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "git-remote-clean: not a git repository." >&2; return 1; }
+
+  # Fail closed twice. Without a fetch the local view of origin (which supplies the
+  # ages below) is stale; without an authenticated PR host the open-PR list comes
+  # back EMPTY, which reads as "no branch has a PR" and would delete every branch
+  # on origin. Neither may be inferred from silence.
+  if ! git fetch --prune >/dev/null 2>&1; then
+    echo "git-remote-clean: 'git fetch --prune' FAILED — refusing to delete anything." >&2
+    return 1
+  fi
+  if ! { command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; }; then
+    echo "git-remote-clean: gh unavailable or unauthenticated — cannot list open PRs." >&2
+    echo "  (an empty PR list would make every branch look orphaned; fail closed)" >&2
+    return 1
+  fi
+
+  local -A protect
+  protect[$(_git_default_branch)]=1
+  local b; for b in "${keep_extra[@]}"; do protect[$b]=1; done
+
+  local min; min=$(_git_prune_remote_min_age)
+
+  local candidates; candidates=$(_git_remote_orphans | awk 'NF' | sort -u)
+  if [[ -z "$candidates" ]]; then
+    echo "Nothing to clean — every origin branch has an open PR."
+    return 0
+  fi
+
+  # Age comes from the remote-tracking ref refreshed by the fetch above. An unknown
+  # age is not "old enough" — it is unknown, so it is held back unless -f overrides.
+  local del="" held="" age
+  while IFS= read -r b; do
+    [[ -z "$b" ]] && continue
+    [[ -n "${protect[$b]}" ]] && { held+="  origin/$b  (kept)"$'\n'; continue; }
+    if (( force )); then
+      del+="$b"$'\n'
+      continue
+    fi
+    age=$(_git_ref_age_secs "refs/remotes/origin/$b")
+    if [[ -n "$age" ]] && (( age >= min )); then
+      del+="$b"$'\n'
+    else
+      held+="  origin/$b  ($( [[ -n "$age" ]] && echo "$((age / 60))m < $((min / 60))m grace" || echo "age unknown — fail closed" ); use -f)"$'\n'
+    fi
+  done <<< "$candidates"
+
+  [[ -n "$held" ]] && { echo "Held back:"; printf '%s' "$held"; }
+
+  del=$(printf '%s' "$del" | awk 'NF')
+  if [[ -z "$del" ]]; then
+    echo "Nothing to delete."
+    return 0
+  fi
+
+  local count; count=$(printf '%s\n' "$del" | wc -l | tr -d ' ')
+  echo "Will DELETE $count remote branch(es) on origin (no open PR, NO landed-proof):"
+  printf '%s\n' "$del" | sed 's|^|  origin/|'
+
+  if (( dry_run )); then
+    echo "--dry-run: nothing deleted."
+    return 0
+  fi
+
+  if (( ! assume_yes )); then
+    local reply
+    read -q "reply?Proceed with the REMOTE nuke above? [y/N] "; echo
+    [[ "$reply" == [yY] ]] || { echo "Aborted. Nothing deleted."; return 0; }
+  fi
+
+  local deleted=0 failed=0
+  while IFS= read -r b; do
+    [[ -z "$b" ]] && continue
+    if git push origin --delete "$b" 2>/dev/null; then
+      echo "  deleted origin/$b"; deleted=$((deleted + 1))
+    else
+      echo "  FAILED  origin/$b" >&2; failed=$((failed + 1))
+    fi
+  done <<< "$del"
+
+  echo "==> Deleted $deleted remote branch(es)$( (( failed )) && echo ", $failed failed" )."
 }

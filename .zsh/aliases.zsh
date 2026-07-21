@@ -25,6 +25,7 @@ alias gk='gitk --all&'
 alias gx='gitx --all'
 alias gsp='git-sync'   # sync + prune: pull --ff-only + fetch --tags + local orphan prune
 alias glc='git-local-clean'   # full local reset: delete all non-default branches + worktrees (no landed-proof, never origin)
+alias grc='git-remote-clean'  # full remote reset: delete all origin branches with no open PR (no landed-proof, 6h grace unless -f)
 alias bfg='java -jar $HOME/bfg-1.14.0.jar'
 
 alias ms='tmuxinator start'
