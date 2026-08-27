@@ -1631,3 +1631,131 @@ git-remote-clean() {
 
   echo "==> Deleted $deleted remote branch(es)$( (( failed )) && echo ", $failed failed" )."
 }
+
+# ─── Worktree-only reset (branches untouched) ────────────────────────────────
+#
+# Unlinks secondary worktrees and NOTHING else — no branch deletion, local or
+# remote. Every branch a removed worktree held survives as a local ref, so the
+# work is one `git switch` away. This is the sibling git-local-clean is too big
+# for: the common need is reclaiming the checkout directories, not the refs.
+#
+# --prefix matches the worktree's DIRECTORY BASENAME or its branch name, as a
+# literal leading substring (repeatable; a worktree matching any prefix is a
+# candidate). With no --prefix every secondary worktree is a candidate.
+#
+# The main worktree is never a candidate. DIRTY or LOCKED worktrees are held
+# back (uncommitted work a force-remove would discard); -f overrides both.
+#
+#   git-worktree-clean                    preview + confirm, remove all secondary
+#   git-worktree-clean --prefix agent-    only worktrees whose dir/branch starts so
+#   git-worktree-clean -f                 also remove dirty/locked worktrees
+#   git-worktree-clean -y                 skip the confirmation prompt
+#   git-worktree-clean --dry-run          print the plan, remove nothing
+git-worktree-clean() {
+  local dry_run=0 force=0 assume_yes=0
+  local -a prefixes=()
+  while (( $# )); do
+    case "$1" in
+      -n|--dry-run) dry_run=1 ;;
+      -f|--force)   force=1 ;;
+      -y|--yes)     assume_yes=1 ;;
+      -p|--prefix)  shift; [[ -n "$1" ]] && prefixes+=("$1") ;;
+      --prefix=*)   prefixes+=("${1#--prefix=}") ;;
+      -h|--help)
+        echo "usage: git-worktree-clean [--prefix P]... [--dry-run|-n] [-f|--force] [-y|--yes]"
+        echo "  Removes secondary worktrees only — never deletes branches."
+        echo "  --prefix matches the worktree dir basename or its branch name."
+        return 0 ;;
+      *) echo "git-worktree-clean: unknown option '$1'" >&2; return 2 ;;
+    esac
+    shift
+  done
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "git-worktree-clean: not a git repository." >&2; return 1; }
+
+  local wt_info main_wt cwd
+  wt_info=$(git worktree list --porcelain)
+  main_wt=$(echo "$wt_info" | awk '/^worktree / { print $2; exit }')
+  cwd=$PWD
+
+  # One pass over the porcelain: "<path>\t<locked>\t<branch>" per secondary worktree.
+  # NB: no `local path` — in zsh that clobbers $PATH (path is the array form of PATH).
+  local remove_wt="" skip_wt="" awkout wtp lk brc base matched pre
+  awkout=$(echo "$wt_info" | awk -v main="$main_wt" '
+    BEGIN { RS = ""; FS = "\n" }
+    {
+      p = ""; lk = 0; br = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^worktree /)                 p  = substr($i, 10)
+        else if ($i ~ /^locked/)               lk = 1
+        else if ($i ~ /^branch refs\/heads\//) br = substr($i, 19)
+      }
+      if (p != "" && p != main) print p "\t" lk "\t" br
+    }')
+
+  while IFS=$'\t' read -r wtp lk brc; do
+    [[ -z "$wtp" ]] && continue
+
+    if (( ${#prefixes} )); then
+      base="${wtp:t}"
+      matched=0
+      for pre in "${prefixes[@]}"; do
+        [[ "$base" == "$pre"* || ( -n "$brc" && "$brc" == "$pre"* ) ]] && { matched=1; break; }
+      done
+      (( matched )) || continue
+    fi
+
+    # Never unlink the tree we are standing in — git refuses anyway, and the
+    # failure would land mid-sweep instead of as a legible skip up front.
+    if [[ "$cwd" == "$wtp" || "$cwd" == "$wtp"/* ]]; then
+      skip_wt+="  $wtp  (current directory — cd out first)"$'\n'
+      continue
+    fi
+
+    # check_age=0: this is an explicit operator sweep, so a young HEAD is not a
+    # reason to keep a clean worktree — only locked/dirty/unreadable is.
+    if (( force )) || ! _git_worktree_is_live "$wtp" "$lk" 0; then
+      remove_wt+="$wtp"$'\t'"$lk"$'\n'
+    else
+      skip_wt+="  $wtp  ($( [[ "$lk" == 1 ]] && echo locked || echo "dirty or unreadable" ) — kept; use -f)"$'\n'
+    fi
+  done <<< "$awkout"
+
+  remove_wt=$(printf '%s' "$remove_wt" | awk 'NF')
+
+  [[ -n "$skip_wt" ]] && { echo "Protected worktrees (kept):"; printf '%s' "$skip_wt"; }
+
+  if [[ -z "$remove_wt" ]]; then
+    echo "Nothing to remove — no matching secondary worktrees$( (( ${#prefixes} )) && echo " for prefix: ${prefixes[*]}" )."
+    return 0
+  fi
+
+  echo "Will REMOVE (worktrees only — no branch is deleted):"
+  printf '%s\n' "$remove_wt" | awk -F'\t' 'NF{print "  worktree " $1 ($2=="1"?"  (locked — will unlock)":"")}'
+
+  if (( dry_run )); then
+    echo "--dry-run: nothing removed."
+    return 0
+  fi
+
+  if (( ! assume_yes )); then
+    local reply
+    read -q "reply?Unlink the worktrees above? [y/N] "; echo
+    [[ "$reply" == [yY] ]] || { echo "Aborted. Nothing removed."; return 0; }
+  fi
+
+  local removed=0 failed=0
+  while IFS=$'\t' read -r wtp lk; do
+    [[ -z "$wtp" ]] && continue
+    [[ "$lk" == "1" ]] && git worktree unlock "$wtp" >/dev/null 2>&1
+    if git worktree remove $( (( force )) && echo --force ) "$wtp" 2>/dev/null; then
+      echo "  removed worktree $wtp"; removed=$((removed + 1))
+    else
+      echo "  FAILED  worktree $wtp (busy or dirty — rerun with -f)" >&2; failed=$((failed + 1))
+    fi
+  done <<< "$remove_wt"
+
+  git worktree prune >/dev/null 2>&1
+  echo "==> Removed $removed worktree(s)$( (( failed )) && echo ", $failed failed" ); branches untouched."
+}
