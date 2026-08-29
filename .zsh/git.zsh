@@ -6,7 +6,7 @@ get_github_url() {
     return 1
   fi
 
-  if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+  if [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]]; then
     echo "Error: Not inside a Git repository."
     return 1
   fi
@@ -350,7 +350,7 @@ git-merge-pr-clean() {
     done
   fi
 
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "Error: not in a git repo" >&2; return 1; }
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || { echo "Error: no work tree here (bare repo? run from a worktree)" >&2; return 1; }
 
   local default
   default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
@@ -476,8 +476,8 @@ _git_pr_related_branches() {
     return 2
   fi
 
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "Error: not in a git repo" >&2
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
+    echo "Error: no work tree here (bare repo? run from a worktree)" >&2
     return 1
   }
 
@@ -577,8 +577,8 @@ _git_merge_pr_clean_scoped() {
     return 2
   fi
 
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "Error: not in a git repo" >&2
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
+    echo "Error: no work tree here (bare repo? run from a worktree)" >&2
     return 1
   }
 
@@ -864,8 +864,8 @@ _git_worktree_is_live() {
 # List remote branches on origin that have no open PR (and aren't the default).
 # Excludes origin/HEAD and the default branch.
 _git_remote_orphans() {
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "Error: not in a git repo" >&2
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
+    echo "Error: no work tree here (bare repo? run from a worktree)" >&2
     return 1
   }
 
@@ -888,8 +888,8 @@ _git_remote_orphans() {
 # Includes branches that never had upstream AND branches whose upstream was deleted.
 # Excludes origin/HEAD.
 _git_local_orphans() {
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "Error: not in a git repo" >&2
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
+    echo "Error: no work tree here (bare repo? run from a worktree)" >&2
     return 1
   }
 
@@ -949,8 +949,8 @@ git-prune-orphans() {
 _git_prune_remote_orphans() {
   local dry_run="$1" interactive="${2:-0}"
 
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "Error: not in a git repo" >&2
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
+    echo "Error: no work tree here (bare repo? run from a worktree)" >&2
     return 1
   }
 
@@ -1070,8 +1070,8 @@ _git_prune_local_orphans() {
     esac
   done
 
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "Error: not in a git repo" >&2
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
+    echo "Error: no work tree here (bare repo? run from a worktree)" >&2
     return 1
   }
 
@@ -1340,7 +1340,20 @@ git-sync() {
     esac
   done
 
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "Error: not in a git repo" >&2; return 1; }
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || { echo "Error: no work tree here — repo is bare. Fix: git config core.bare false in the trunk." >&2; return 1; }
+
+  # git-sync is a TRUNK verb. In a linked worktree it would fast-forward that
+  # lane's own branch and then prune orphans against the SHARED ref store — the
+  # two things a lane must never do to its siblings. A linked worktree's
+  # --git-dir differs from its --git-common-dir; in the trunk they are the same.
+  local _gd _gcd
+  _gd=$(cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)
+  _gcd=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
+  if [[ -n "$_gd" && -n "$_gcd" && "$_gd" != "$_gcd" ]]; then
+    echo "Error: git-sync is a trunk verb; you are in a linked worktree ($(git rev-parse --show-toplevel))." >&2
+    echo "       Run it from the trunk, or 'git merge origin/<default>' to move just this lane." >&2
+    return 1
+  fi
 
   local upstream
   upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)
@@ -1396,7 +1409,7 @@ git-local-clean() {
     shift
   done
 
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
     echo "git-local-clean: not a git repository." >&2; return 1; }
 
   local default; default=$(_git_default_branch)
@@ -1549,7 +1562,7 @@ git-remote-clean() {
     shift
   done
 
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
     echo "git-remote-clean: not a git repository." >&2; return 1; }
 
   # Fail closed twice. Without a fetch the local view of origin (which supplies the
@@ -1671,7 +1684,7 @@ git-worktree-clean() {
     shift
   done
 
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
     echo "git-worktree-clean: not a git repository." >&2; return 1; }
 
   local wt_info main_wt cwd
