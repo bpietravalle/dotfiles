@@ -1,0 +1,370 @@
+#!/usr/bin/env python3
+"""claude-procs — survey Claude sessions, their child processes, and orphans.
+
+READ-ONLY by default. Groups by repo, classifies each process (mcp/test/lint/
+node/...), reports RSS, and prints the exact command to kill a PID or to hand a
+session to its own Claude for investigation.
+
+This tool NEVER kills anything on its own. Its ancestor (bin/claude-procs-reap,
+deleted in dedbcfa) auto-reaped process trees and SIGKILLed the operator's ssh
+tunnels because it gated only the tree root and killed descendants unexamined.
+That lesson is load-bearing: no auto-reap, no tree recursion, no --kill-all.
+Killing is the operator's explicit act on an explicit PID.
+
+Usage:
+  claude-procs                 grouped survey (default)
+  claude-procs --repo NAME     restrict to one repo
+  claude-procs --orphans       just the orphans
+  claude-procs --sort rss|cpu|age   order within groups (default: rss)
+  claude-procs --min-rss MB    hide processes below MB (default: 0)
+  claude-procs --json          machine-readable
+"""
+import argparse, json, os, re, subprocess, sys
+from pathlib import Path
+
+HOME = Path.home()
+SESSIONS_DIR = HOME / ".claude" / "sessions"
+
+# Where checkouts live, one path per entry. Override with CLAUDE_PROCS_ROOTS
+# (colon-separated) to match your own layout; a path outside every root is
+# reported as-is with $HOME abbreviated to ~.
+REPO_ROOTS = [
+    p if p.endswith("/") else p + "/"
+    for p in (os.environ.get("CLAUDE_PROCS_ROOTS")
+              or f"{HOME}/src:{HOME}/code:{HOME}/projects:{HOME}/dev").split(":")
+    if p
+]
+
+# Classification: first match wins. Ordered most-specific to least.
+CLASSES = [
+    ("mcp:serena",     r"serena"),
+    ("mcp:chrome",     r"claude-in-chrome|chrome.*mcp"),
+    ("mcp:context7",   r"context7"),
+    ("mcp:ctx-mode",   r"context-mode|ctx_"),
+    ("mcp:seq-think",  r"sequential-thinking"),
+    ("mcp",            r"mcp-server|modelcontextprotocol|[-_]mcp\b|\bmcp[-_]"),
+    ("test:pytest",    r"\bpytest\b"),
+    ("test:vitest",    r"\bvitest\b"),
+    ("test:jest",      r"\bjest\b"),
+    ("lint",           r"\beslint\b|\bprettier\b|\btsc\b|ts-unused-exports"),
+    ("deps:pdm",       r"\bpdm\b"),
+    ("deps:node",      r"\bpnpm\b|\bnpm\b|\bnpx\b|\byarn\b"),
+    ("deps:py",        r"\buv\b|\bpip\b"),
+    ("build",          r"\btsx\b|\bvite\b|esbuild|webpack"),
+    ("search",         r"\bbfs\b|\brg\b|ripgrep|\bfind\b|\bgrep\b"),
+    ("git",            r"\bgit\b"),
+    ("jira",           r"jira_iface|jira"),
+    ("python",         r"[Pp]ython"),
+    ("node",           r"\bnode\b"),
+]
+
+def classify(cmd):
+    for name, pat in CLASSES:
+        if re.search(pat, cmd):
+            return name
+    return "other"
+
+def human(kb):
+    mb = kb / 1024.0
+    return f"{mb/1024:.1f}G" if mb >= 1024 else f"{mb:.0f}M"
+
+def age_secs(etime):
+    # ps etime: [[dd-]hh:]mm:ss
+    d, _, rest = etime.partition("-")
+    if not rest:
+        rest, d = d, "0"
+    parts = [int(x) for x in rest.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    h, m, s = parts
+    return int(d) * 86400 + h * 3600 + m * 60 + s
+
+def age_short(secs):
+    if secs >= 86400: return f"{secs//86400}d"
+    if secs >= 3600:  return f"{secs//3600}h"
+    if secs >= 60:    return f"{secs//60}m"
+    return f"{secs}s"
+
+def ps_snapshot():
+    out = subprocess.run(
+        ["ps", "-eo", "pid=,ppid=,etime=,%cpu=,rss=,command="],
+        capture_output=True, text=True).stdout
+    procs = {}
+    for line in out.splitlines():
+        f = line.split(None, 5)
+        if len(f) < 6:
+            continue
+        pid, ppid, etime, cpu, rss, cmd = f
+        try:
+            procs[int(pid)] = {
+                "pid": int(pid), "ppid": int(ppid), "cmd": cmd,
+                "cpu": float(cpu), "rss_kb": int(rss),
+                "age": age_secs(etime),
+            }
+        except ValueError:
+            continue
+    return procs
+
+CLAUDE_RE = re.compile(r"/(\.local/bin|\.local/share)/claude|/bin/claude$")
+
+def load_sessions(procs):
+    """Live claude sessions from ~/.claude/sessions/<pid>.json, pid must be alive.
+
+    Every live `claude` process becomes a session boundary even when it has no
+    registry file (subagents, just-started sessions). Without this its children
+    walk past it to init and get reported as orphans -- i.e. the kill list would
+    name live, owned work.
+    """
+    sessions = {}
+    if not SESSIONS_DIR.is_dir():
+        return sessions
+    for f in SESSIONS_DIR.glob("*.json"):
+        try:
+            d = json.loads(f.read_text())
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        pid = d.get("pid")
+        if not isinstance(pid, int) or pid not in procs:
+            continue
+        # Guard against pid reuse: the live process must actually be claude.
+        if "claude" not in procs[pid]["cmd"]:
+            continue
+        sessions[pid] = {
+            "pid": pid,
+            "name": d.get("name") or f"pid-{pid}",
+            "cwd": d.get("cwd") or "?",
+            "tmux": d.get("tmux") or "-",
+            "status": d.get("status") or "?",
+            "kind": d.get("kind") or "?",
+        }
+    for pid, pr in procs.items():
+        if pid in sessions or not CLAUDE_RE.search(pr["cmd"]):
+            continue
+        sessions[pid] = {
+            "pid": pid, "name": f"(unregistered pid {pid})",
+            "cwd": proc_cwd(pid), "tmux": "-",
+            "status": "?", "kind": "no-registry",
+        }
+    return sessions
+
+def proc_cwd(pid):
+    out = subprocess.run(["lsof", "-p", str(pid), "-a", "-d", "cwd", "-Fn"],
+                         capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        if line.startswith("n"):
+            return line[1:]
+    return "?"
+
+def repo_of(path):
+    p = str(path)
+    for root in REPO_ROOTS:
+        if p.startswith(root):
+            return p[len(root):].split("/")[0]
+    return p.replace(str(HOME), "~")
+
+def find_owner(pid, procs, session_pids):
+    """Walk the PPID chain to the first claude session pid. None if orphaned."""
+    seen, cur, guard = set(), pid, 0
+    while cur not in (0, 1) and guard < 40:
+        if cur in session_pids:
+            return cur
+        if cur in seen:
+            break
+        seen.add(cur)
+        p = procs.get(cur)
+        if not p:
+            break
+        cur = p["ppid"]
+        guard += 1
+    return None
+
+def do_kill(orphans, args):
+    """SIGTERM the orphan list, then SIGKILL only what survives.
+
+    Scoped to the orphan list and nothing else: no PPID recursion, no process
+    groups. The predecessor of this tool killed descendants unexamined and took
+    out the ssh tunnels that happened to be parented under a session.
+    """
+    import signal, time
+    pids = [p["pid"] for p in orphans]
+    if not args.yes:
+        print(f"\n  about to SIGTERM {len(pids)} orphan(s), then SIGKILL survivors "
+              f"after {args.kill_wait}s")
+        try:
+            if input("  proceed? [y/N] ").strip().lower() not in ("y", "yes"):
+                print("  aborted")
+                return 1
+        except (EOFError, KeyboardInterrupt):
+            print("\n  aborted")
+            return 1
+
+    termed = []
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            termed.append(pid)
+        except ProcessLookupError:
+            print(f"  {pid}: already gone")
+        except PermissionError:
+            print(f"  {pid}: not permitted")
+    if not termed:
+        return 0
+    print(f"  SIGTERM -> {len(termed)}")
+
+    deadline = time.time() + args.kill_wait
+    alive = list(termed)
+    while alive and time.time() < deadline:
+        time.sleep(0.25)
+        alive = [p for p in alive if _alive(p)]
+    for pid in alive:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            print(f"  {pid}: SIGKILL (survived SIGTERM)")
+        except (ProcessLookupError, PermissionError):
+            pass
+    print(f"  exited cleanly on SIGTERM: {len(termed) - len(alive)}/{len(termed)}")
+    return 0
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True, description="Survey Claude sessions and their processes (read-only).")
+    ap.add_argument("--repo", help="restrict to one repo")
+    ap.add_argument("--orphans", action="store_true", help="only the orphan section")
+    ap.add_argument("--sort", choices=["rss", "cpu", "age"], default="rss")
+    ap.add_argument("--min-rss", type=float, default=0, metavar="MB")
+    ap.add_argument("--orphan-age", type=int, default=120, metavar="SEC",
+                    help="min age before a parentless process counts as an orphan "
+                         "(default 120; guards against mid-reparent false positives)")
+    ap.add_argument("--kill", action="store_true",
+                    help="with --orphans: SIGTERM the listed orphans, then SIGKILL "
+                         "any that survive --kill-wait seconds")
+    ap.add_argument("--kill-wait", type=float, default=5.0, metavar="SEC")
+    ap.add_argument("--yes", "-y", action="store_true", help="skip the confirmation")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    procs = ps_snapshot()
+    sessions = load_sessions(procs)
+    session_pids = set(sessions)
+
+    # Attribute every non-session process that looks like Claude-spawned work.
+    TRACK = re.compile(
+        r"node|python|Python|pdm|vitest|jest|pytest|tsx|mcp|serena|npx|pnpm|"
+        r"eslint|tsc|bfs|uv\b", re.I)
+    for pid, p in procs.items():
+        p["owner"] = None
+        p["cls"] = None
+    for pid, p in procs.items():
+        if pid in session_pids or not TRACK.search(p["cmd"]):
+            continue
+        p["cls"] = classify(p["cmd"])
+        p["owner"] = find_owner(pid, procs, session_pids)
+
+    tracked = [p for p in procs.values() if p["cls"]]
+    if args.min_rss:
+        tracked = [p for p in tracked if p["rss_kb"] / 1024 >= args.min_rss]
+
+    key = {"rss": lambda p: -p["rss_kb"], "cpu": lambda p: -p["cpu"], "age": lambda p: -p["age"]}[args.sort]
+
+    # Group sessions by repo.
+    by_repo = {}
+    for s in sessions.values():
+        by_repo.setdefault(repo_of(s["cwd"]), []).append(s)
+
+    kids = {}
+    for p in tracked:
+        if p["owner"]:
+            kids.setdefault(p["owner"], []).append(p)
+    orphans = sorted([p for p in tracked
+                      if not p["owner"] and p["age"] >= args.orphan_age], key=key)
+    young = [p for p in tracked
+             if not p["owner"] and p["age"] < args.orphan_age]
+
+    if args.json:
+        print(json.dumps({
+            "sessions": [
+                dict(s, repo=repo_of(s["cwd"]),
+                     procs=sorted(kids.get(s["pid"], []), key=key))
+                for s in sessions.values()],
+            "orphans": orphans,
+        }, indent=2, default=str))
+        return
+
+    W = 100
+    def rss_of(s):
+        own = procs[s["pid"]]["rss_kb"]
+        return own + sum(k["rss_kb"] for k in kids.get(s["pid"], []))
+
+    if not args.orphans:
+        # Roll-up table first — the "quick look".
+        print(f"\n{'REPO':<22}{'SESS':>5}{'PROCS':>7}{'RSS':>9}   TOP CLASSES")
+        print("─" * W)
+        for repo in sorted(by_repo, key=lambda r: -sum(rss_of(s) for s in by_repo[r])):
+            if args.repo and repo != args.repo:
+                continue
+            ss = by_repo[repo]
+            all_k = [k for s in ss for k in kids.get(s["pid"], [])]
+            tot = sum(rss_of(s) for s in ss)
+            cnt = {}
+            for k in all_k:
+                cnt[k["cls"]] = cnt.get(k["cls"], 0) + 1
+            top = " ".join(f"{c}×{n}" for c, n in sorted(cnt.items(), key=lambda x: -x[1])[:4])
+            print(f"{repo:<22}{len(ss):>5}{len(all_k):>7}{human(tot):>9}   {top}")
+        print("─" * W)
+
+        for repo in sorted(by_repo, key=lambda r: -sum(rss_of(s) for s in by_repo[r])):
+            if args.repo and repo != args.repo:
+                continue
+            print(f"\n\033[1m━━ {repo}\033[0m")
+            for s in sorted(by_repo[repo], key=lambda s: -rss_of(s)):
+                k = sorted(kids.get(s["pid"], []), key=key)
+                sp = procs[s["pid"]]
+                print(f"  \033[36m{s['name']}\033[0m  {s['status']:<6} {s['kind']:<12} "
+                      f"tmux {s['tmux']:<22} pid {s['pid']:<7} {human(rss_of(s)):>7} "
+                      f"({human(sp['rss_kb'])} self)  age {age_short(sp['age'])}")
+                for p in k:
+                    print(f"      {p['pid']:<7} {age_short(p['age']):>5} "
+                          f"{p['cpu']:>6.1f}% {human(p['rss_kb']):>7}  "
+                          f"{p['cls']:<14} {p['cmd'][:44]}")
+                if not k:
+                    print("      (no tracked children)")
+
+    print(f"\n\033[1m━━ ORPHANS\033[0m  (no live claude ancestor)")
+    if not orphans:
+        print("  (none)")
+    else:
+        for p in orphans:
+            print(f"      {p['pid']:<7} {age_short(p['age']):>5} "
+                  f"{p['cpu']:>6.1f}% {human(p['rss_kb']):>7}  "
+                  f"{p['cls']:<14} {p['cmd'][:44]}")
+        print(f"\n  kill them:  kill {' '.join(str(p['pid']) for p in orphans)}")
+    if young:
+        print(f"  ({len(young)} parentless but younger than {args.orphan_age}s — "
+              f"not listed; may be mid-reparent. --orphan-age 0 to see them)")
+
+    if args.kill:
+        if not args.orphans:
+            print("\n  --kill requires --orphans (it only ever targets the orphan list)")
+            return 2
+        if not orphans:
+            return 0
+        return do_kill(orphans, args)
+
+    print("\n  investigate:  ask a session's own Claude — in that pane, or from another")
+    print("                session:  SendMessage to=\"<name>\"  (names in cyan above)")
+    print()
+
+if __name__ == "__main__":
+    sys.exit(main())
