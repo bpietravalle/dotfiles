@@ -73,3 +73,28 @@ alias grl="gh run list"
 alias grv="gh run view"
 
 # Claude shell management moved to ~/.zsh/claude.zsh
+
+# ── fseventsd ──────────────────────────────────────────────────────────────
+# The filesystem-events daemon journals every create/write/rename/delete and
+# fans them out to watchers (Spotlight, editors, fswatch, backup agents). When
+# something generates events faster than watchers drain them its in-memory
+# per-client state grows unbounded — a deep-copying worktree bootstrap once
+# left it holding 3.8G at 90% CPU for 11 days.
+alias fsev='ps -eo pid,%cpu,rss,etime,comm | grep -E "fseventsd|mds_stores" | grep -v grep'
+
+# HUP it: launchd respawns it with an empty journal, which is the memory
+# reclaim. Disruptive, not dangerous — every watcher's event stream is
+# invalidated, so editors and backup agents do a full rescan. Nothing on disk
+# is lost. Prints state and requires an explicit y.
+fsev-reset() {
+  local pid rss
+  pid=$(pgrep -x fseventsd | head -1)
+  [[ -z "$pid" ]] && { echo "fseventsd: not running"; return 1; }
+  rss=$(ps -p "$pid" -o rss= | tr -d ' ')
+  printf 'fseventsd pid %s — %.0fM RSS, up %s\n' \
+    "$pid" "$(( rss / 1024.0 ))" "$(ps -p "$pid" -o etime= | tr -d ' ')"
+  echo "HUP invalidates every watcher's event stream (editors, fswatch, backups rescan)."
+  read -q "?Reset? [y/N] " || { echo; return 1; }
+  echo
+  sudo pkill -HUP fseventsd && echo "sent; launchd respawns it fresh"
+}
