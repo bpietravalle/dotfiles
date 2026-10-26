@@ -674,6 +674,7 @@ _git_merge_pr_clean_scoped() {
   # Merge.
   echo
   echo "==> Merging PR #$pr"
+  _git_remote_locked "git-merge-pr-clean" && return 1
   gh pr merge "$pr" -s --admin || return 1
   # --no-pull defers the pull to a single post-loop pull in --all mode (so repos
   # with post-pull git hooks run them once, not once per PR). Branch/worktree
@@ -790,6 +791,25 @@ _git_merge_pr_clean_scoped() {
 #                                proof; 6h grace unless -f
 #
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Remote-write lock. A repo whose main worktree sits at or under a directory holding
+# a `.git-remote-lock` file refuses every remote-destructive verb here (origin branch
+# deletes, admin merges). The marker lives on disk, not in this file, so protected
+# paths never ship in dotfiles. Resolved via the common git dir so linked worktrees
+# outside the tree inherit their main repo's lock. Prints the refusal; 0 = locked.
+_git_remote_locked() {
+  local verb="$1" dir
+  dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  dir=${dir:h}
+  while [[ "$dir" != "/" ]]; do
+    if [[ -e "$dir/.git-remote-lock" ]]; then
+      echo "$verb: refused — remote-destructive verbs are locked here ($dir/.git-remote-lock)." >&2
+      return 0
+    fi
+    dir=${dir:h}
+  done
+  return 1
+}
 
 # Resolve the repo's default branch (origin/HEAD), falling back to "master".
 _git_default_branch() {
@@ -953,6 +973,7 @@ _git_prune_remote_orphans() {
     echo "Error: no work tree here (bare repo? run from a worktree)" >&2
     return 1
   }
+  (( dry_run )) || ! _git_remote_locked "git-prune-orphans -r" || return 1
 
   # Fail closed: deleting a REMOTE ref destroys the copy of last resort. If origin
   # cannot be fetched or named, nothing is provable and nothing is deleted.
@@ -1564,6 +1585,7 @@ git-remote-clean() {
 
   [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
     echo "git-remote-clean: not a git repository." >&2; return 1; }
+  (( dry_run )) || ! _git_remote_locked "git-remote-clean" || return 1
 
   # Fail closed twice. Without a fetch the local view of origin (which supplies the
   # ages below) is stale; without an authenticated PR host the open-PR list comes
