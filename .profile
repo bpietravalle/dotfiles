@@ -21,4 +21,4 @@
 # #   PATH="$HOME/bin:$PATH"
 # #i
 
-export PATH="$HOME/.cargo/bin:$PATH"
+. "$HOME/.cargo/env"
