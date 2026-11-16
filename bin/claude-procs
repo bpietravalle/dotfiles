@@ -58,6 +58,15 @@ CLASSES = [
     ("node",           r"\bnode\b"),
 ]
 
+# Machine-shared infra (ele-shared-infra#558): a devbox keepalive started with
+# `--shared` serves every session on the machine. It is never an orphan and
+# never a session's child -- a sweep that read it as a lane leftover killed the
+# only dev keepalive.
+SHARED_RE = re.compile(r"rvt_devbox\.keepalive")
+
+def is_shared_infra(cmd):
+    return bool(SHARED_RE.search(cmd)) and "--shared" in cmd.split()
+
 def classify(cmd):
     for name, pat in CLASSES:
         if re.search(pat, cmd):
@@ -266,8 +275,14 @@ def main():
     for pid, p in procs.items():
         p["owner"] = None
         p["cls"] = None
+    shared = []
     for pid, p in procs.items():
-        if pid in session_pids or not TRACK.search(p["cmd"]):
+        if pid in session_pids:
+            continue
+        if is_shared_infra(p["cmd"]):
+            shared.append(p)
+            continue
+        if not TRACK.search(p["cmd"]):
             continue
         p["cls"] = classify(p["cmd"])
         p["owner"] = find_owner(pid, procs, session_pids)
@@ -299,6 +314,7 @@ def main():
                      procs=sorted(kids.get(s["pid"], []), key=key))
                 for s in sessions.values()],
             "orphans": orphans,
+            "shared": shared,
         }, indent=2, default=str))
         return
 
@@ -340,6 +356,13 @@ def main():
                           f"{p['cls']:<14} {p['cmd'][:44]}")
                 if not k:
                     print("      (no tracked children)")
+
+    if shared and not args.orphans:
+        print(f"\n\033[1m━━ MACHINE-SHARED\033[0m  (serves every session — never kill)")
+        for p in shared:
+            print(f"      {p['pid']:<7} {age_short(p['age']):>5} "
+                  f"{p['cpu']:>6.1f}% {human(p['rss_kb']):>7}  "
+                  f"{'shared-infra':<14} {p['cmd'][:44]}")
 
     print(f"\n\033[1m━━ ORPHANS\033[0m  (no live claude ancestor)")
     if not orphans:
