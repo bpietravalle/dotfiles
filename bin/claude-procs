@@ -58,14 +58,16 @@ CLASSES = [
     ("node",           r"\bnode\b"),
 ]
 
-# Machine-shared infra (ele-shared-infra#558): a devbox keepalive started with
-# `--shared` serves every session on the machine. It is never an orphan and
-# never a session's child -- a sweep that read it as a lane leftover killed the
-# only dev keepalive.
-SHARED_RE = re.compile(r"rvt_devbox\.keepalive")
+# Machine-shared infra: the rvt-devbox keepalive runs one instance per env and
+# serves every session on the machine, so it is never an orphan and never a
+# session's child -- a sweep that read it as a lane leftover killed the only dev
+# keepalive. ele-shared-infra#558 adds a `--shared` argv marker; until it ships
+# the bare module name is the signal, and with one keepalive per env by design
+# every instance is shared, marked or not.
+SHARED_RE = re.compile(r"\brvt_devbox\.keepalive\b")
 
 def is_shared_infra(cmd):
-    return bool(SHARED_RE.search(cmd)) and "--shared" in cmd.split()
+    return bool(SHARED_RE.search(cmd))
 
 def classify(cmd):
     for name, pat in CLASSES:
